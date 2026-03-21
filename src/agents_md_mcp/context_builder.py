@@ -541,6 +541,23 @@ Include the exact lint/format commands. Omit if nothing detected.
 ### Build and Deployment
 Build commands and CI pipeline info from ci_files_found. Omit if empty.
 
+### Keeping AGENTS.md Up to Date
+ALWAYS include this section verbatim at the end of every AGENTS.md, regardless
+of the project:
+
+```
+## Keeping AGENTS.md Up to Date
+
+This file is generated and maintained by the `agents-md-generator` MCP tool.
+**Never edit it manually.** To regenerate after code changes, ask Claude Code:
+
+> "Update the AGENTS.md for this project"
+
+Claude will invoke the `generate_agents_md` tool automatically, perform an
+incremental scan of changed files, and rewrite only the affected sections.
+To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
+```
+
 ## QUALITY BAR
 
 - Conventions section must be actionable: an agent reading it should know

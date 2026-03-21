@@ -27,7 +27,7 @@ from .cache import (
 from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
-from .models import CachedFile, GenerateAgentsMdInput
+from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
 logging.basicConfig(
@@ -154,7 +154,16 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
         if analysis and change.new_hash:
             new_cache.files[change.path] = CachedFile(
                 hash=change.new_hash,
-                analysis=analysis,
+                symbols=[
+                    CachedSymbol(
+                        name=s.name,
+                        kind=s.kind,
+                        visibility=s.visibility,
+                        signature=s.signature,
+                        decorators=s.decorators,
+                    )
+                    for s in analysis.symbols
+                ],
             )
     save_cache(project_path, new_cache)
     logger.info("Cache saved with %d entries", len(new_cache.files))

@@ -421,27 +421,27 @@ def build_payload(
 
         if change.status == "modified":
             # Compute diff against cached version
-            old_analysis = None
+            old_symbols = None
             if cache and change.path in cache.files:
-                old_analysis = cache.files[change.path].analysis
+                old_symbols = cache.files[change.path].symbols
 
-            if old_analysis:
-                diff = diff_analysis(old_analysis, analysis)
+            if old_symbols is not None:
+                diff = diff_analysis(old_symbols, analysis.symbols)
                 # Filter by impact threshold
                 def impact_entry(sym, ctype):
                     imp = classify_impact(sym, ctype)
                     return imp, sym
 
                 filtered_added = [
-                    s.model_dump() for s in diff.added
+                    _slim_symbol(s) for s in diff.added
                     if _passes_threshold(classify_impact(s, "added"), threshold)
                 ]
                 filtered_removed = [
-                    s.model_dump() for s in diff.removed
+                    _slim_symbol(s) for s in diff.removed
                     if _passes_threshold(classify_impact(s, "removed"), threshold)
                 ]
                 filtered_modified = [
-                    s.model_dump() for s in diff.modified
+                    _slim_symbol(s) for s in diff.modified
                     if _passes_threshold(classify_impact(s, "modified"), threshold)
                 ]
 
@@ -516,6 +516,17 @@ def _is_test_file(path: str) -> bool:
         or any(name.endswith(p) for p in ("_test.py", "_test.go", ".spec.ts", ".spec.js", ".test.ts", ".test.js"))
         or any(marker in padded for marker in _TEST_PATH_MARKERS)
     )
+
+
+def _slim_symbol(sym) -> dict:
+    """Return only the fields Claude needs — no line numbers, no parent."""
+    return {
+        "name": sym.name,
+        "kind": sym.kind,
+        "visibility": sym.visibility,
+        "signature": sym.signature,
+        "decorators": sym.decorators,
+    }
 
 
 def _is_public(sym) -> bool:

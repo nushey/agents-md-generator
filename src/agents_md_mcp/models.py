@@ -53,11 +53,24 @@ class AnalysisDiff(BaseModel):
     modified: list[SymbolInfo] = Field(default_factory=list)
 
 
+class CachedSymbol(BaseModel):
+    """Minimal symbol stored in cache — only the fields needed for semantic diff."""
+
+    name: str
+    kind: Literal[
+        "class", "method", "function", "interface",
+        "enum", "struct", "property", "field"
+    ]
+    visibility: Optional[str] = None
+    signature: Optional[str] = None
+    decorators: list[str] = Field(default_factory=list)
+
+
 class CachedFile(BaseModel):
     """Cache entry for a single analyzed file."""
 
     hash: str
-    analysis: FileAnalysis
+    symbols: list[CachedSymbol] = Field(default_factory=list)
 
 
 class CacheData(BaseModel):

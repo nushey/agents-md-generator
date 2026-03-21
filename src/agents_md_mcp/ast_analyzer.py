@@ -91,18 +91,22 @@ def analyze_changes(
     return results
 
 
-def diff_analysis(old: FileAnalysis, new: FileAnalysis) -> AnalysisDiff:
-    """Compare two FileAnalysis objects and return only what changed."""
-    old_symbols = {s.name: s for s in old.symbols}
-    new_symbols = {s.name: s for s in new.symbols}
+def diff_analysis(old_symbols: list, new_symbols: list) -> AnalysisDiff:
+    """Compare two symbol lists and return only what changed.
 
-    added = [s for name, s in new_symbols.items() if name not in old_symbols]
-    removed = [s for name, s in old_symbols.items() if name not in new_symbols]
+    Accepts any objects with name/signature/kind/visibility/decorators attributes
+    (both SymbolInfo from a fresh analysis and CachedSymbol from cache).
+    """
+    old_map = {s.name: s for s in old_symbols}
+    new_map = {s.name: s for s in new_symbols}
+
+    added = [s for name, s in new_map.items() if name not in old_map]
+    removed = [s for name, s in old_map.items() if name not in new_map]
     modified = [
-        new_symbols[name]
-        for name in old_symbols
-        if name in new_symbols
-        and old_symbols[name].signature != new_symbols[name].signature
+        new_map[name]
+        for name in old_map
+        if name in new_map
+        and old_map[name].signature != new_map[name].signature
     ]
 
     return AnalysisDiff(added=added, removed=removed, modified=modified)

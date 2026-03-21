@@ -1,0 +1,20 @@
+# Cache
+.agents-cache.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Pytest
+.pytest_cache/
+.coverage
+
+# Editor
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,23 @@
+{
+  "impact_threshold": "medium",
+  "exclude": [
+    "**/node_modules/**",
+    "**/bin/**",
+    "**/obj/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/__pycache__/**",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/vendor/**",
+    "**/packages/**",
+    "**/.venv/**",
+    "**/venv/**"
+  ],
+  "include": [],
+  "languages": "auto",
+  "agents_md_path": "./AGENTS.md",
+  "base_ref": null,
+  "max_file_size_bytes": 1048576
+}

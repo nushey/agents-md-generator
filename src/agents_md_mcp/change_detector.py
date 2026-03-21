@@ -1,14 +1,14 @@
 """ChangeDetector: detects new/modified/deleted files since last scan."""
 
+import fnmatch
 import hashlib
 import logging
 import subprocess
 from pathlib import Path
 
-import fnmatch
-
 from .cache import CacheData
 from .config import ProjectConfig
+from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileChange
 
 logger = logging.getLogger(__name__)
@@ -38,37 +38,46 @@ def _git_ls_files(project_path: Path) -> list[str] | None:
     return None
 
 
-def _fs_walk(project_path: Path) -> list[str]:
-    """Fallback: walk filesystem when not a git repo."""
+def _fs_walk(project_path: Path, gitignore_spec=None) -> list[str]:
+    """Fallback: walk filesystem when not a git repo, respecting .gitignore."""
     files = []
     for p in project_path.rglob("*"):
-        if p.is_file():
-            files.append(str(p.relative_to(project_path)))
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(project_path))
+        if gitignore_spec and is_gitignored(rel, gitignore_spec):
+            continue
+        files.append(rel)
     return files
 
 
-def _matches_any(path: str, patterns: list[str]) -> bool:
-    for pattern in patterns:
-        if fnmatch.fnmatch(path, pattern):
-            return True
-        # Also match against individual path components
-        if fnmatch.fnmatch(Path(path).name, pattern.lstrip("*/")):
-            pass
-    return False
-
-
 def _is_excluded(path: str, config: ProjectConfig) -> bool:
-    """Return True if the path matches any exclude pattern."""
+    """Return True if the path matches any exclude pattern.
+
+    Strategy:
+    1. Direct fnmatch on the full path — handles **/*.ext patterns
+       (fnmatch treats * as matching /, so ** works as a greedy wildcard)
+    2. Inner-segment check — handles **/dirname/** patterns where the path
+       doesn't start with /: extract the middle token and match any component
+    """
+    path_parts = Path(path).parts
     for pattern in config.exclude:
+        # 1. Direct fnmatch (works for **/*.min.js, **/dist/**, etc.)
         if fnmatch.fnmatch(path, pattern):
             return True
-        # Handle patterns like **/node_modules/** by checking each segment
-        parts = Path(pattern).parts
-        path_parts = Path(path).parts
-        for i in range(len(path_parts)):
-            sub = str(Path(*path_parts[i:]))
-            if fnmatch.fnmatch(sub, pattern.lstrip("*/")):
-                return True
+        # 2. Extract inner token between leading **/ and trailing /**
+        #    e.g. "**/.venv/**" → ".venv", "**/node_modules/**" → "node_modules"
+        inner = pattern
+        if inner.startswith("**/"):
+            inner = inner[3:]
+        if inner.endswith("/**"):
+            inner = inner[:-3]
+        # Only apply the component check when we have a clean token (no wildcards
+        # spanning path separators) — avoids false positives on patterns like *.min.js
+        if inner and "/" not in inner and any(
+            fnmatch.fnmatch(part, inner) for part in path_parts
+        ):
+            return True
     return False
 
 
@@ -79,10 +88,16 @@ def _is_included(path: str, config: ProjectConfig) -> bool:
     return any(fnmatch.fnmatch(path, p) for p in config.include)
 
 
-def _filter_paths(paths: list[str], config: ProjectConfig) -> list[str]:
-    """Apply exclude/include filters and extension check."""
+def _filter_paths(
+    paths: list[str],
+    config: ProjectConfig,
+    gitignore_spec=None,
+) -> list[str]:
+    """Apply gitignore, exclude/include filters, and extension check."""
     result = []
     for p in paths:
+        if gitignore_spec and is_gitignored(p, gitignore_spec):
+            continue
         if _is_excluded(p, config):
             continue
         if not _is_included(p, config):
@@ -111,16 +126,24 @@ def detect_changes(
 
     Cold start (no cache): all tracked files → status "new".
     Incremental (cache exists): hash-compare each file.
+
+    For git repos, uses git ls-files (already respects .gitignore).
+    For non-git repos, parses .gitignore via pathspec.
     """
     root = Path(project_path).resolve()
 
     raw_files = _git_ls_files(root)
     is_git_repo = raw_files is not None
-    if raw_files is None:
-        logger.warning("Not a git repo, falling back to filesystem walk")
-        raw_files = _fs_walk(root)
 
-    filtered = _filter_paths(raw_files, config)
+    if is_git_repo:
+        # git ls-files already respects .gitignore — no need to parse it ourselves
+        gitignore_spec = None
+    else:
+        logger.warning("Not a git repo, falling back to filesystem walk")
+        gitignore_spec = load_gitignore_spec(root)
+        raw_files = _fs_walk(root, gitignore_spec)
+
+    filtered = _filter_paths(raw_files, config, gitignore_spec)
 
     if cache is None:
         return _cold_start(root, filtered, config)

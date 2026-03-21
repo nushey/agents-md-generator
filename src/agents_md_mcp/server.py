@@ -113,7 +113,11 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
     if not changes:
         return json.dumps({
             "status": "no_changes",
-            "message": "No changes detected since the last scan. AGENTS.md is up to date.",
+            "message": (
+                "No changes detected since the last scan. AGENTS.md is up to date. "
+                "STOP HERE. Do not call this tool again, do not read any files, "
+                "do not force a new scan. Just inform the user that AGENTS.md is current."
+            ),
         })
 
     logger.info("Detected %d changed files", len(changes))

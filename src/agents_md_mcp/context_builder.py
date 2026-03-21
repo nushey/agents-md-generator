@@ -1,5 +1,6 @@
 """ContextBuilder: assembles the structured JSON payload for Claude Code."""
 
+import fnmatch
 import json
 import logging
 from datetime import datetime, timezone
@@ -7,7 +8,9 @@ from pathlib import Path
 
 from .ast_analyzer import classify_impact, diff_analysis
 from .cache import CacheData
-from .config import ProjectConfig
+from .change_detector import _is_excluded
+from .config import EXTENSION_TO_LANGUAGE, ProjectConfig
+from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileAnalysis, FileChange
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,8 @@ def _detect_build_systems(root: Path) -> dict:
 
 def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     """Scan directories and root files (no AST, pure filesystem)."""
+    gitignore_spec = load_gitignore_spec(root)
+
     root_files = [
         f.name for f in root.iterdir()
         if f.is_file() and not f.name.startswith(".")
@@ -146,14 +151,9 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
             if not item.is_file():
                 continue
             rel = str(item.relative_to(root))
-            # Skip excluded paths
-            skip = False
-            for excl in config.exclude:
-                import fnmatch
-                if fnmatch.fnmatch(rel, excl):
-                    skip = True
-                    break
-            if skip:
+            if is_gitignored(rel, gitignore_spec):
+                continue
+            if _is_excluded(rel, config):
                 continue
             parent_rel = str(item.parent.relative_to(root))
             if parent_rel == ".":
@@ -168,8 +168,6 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     except OSError:
         pass
 
-    # Pick primary language per directory
-    from .config import EXTENSION_TO_LANGUAGE
     dirs_out: dict[str, dict] = {}
     for d, info in dir_summary.items():
         primary = None
@@ -232,6 +230,78 @@ def _passes_threshold(impact: str, threshold: str) -> bool:
 
 # ── Main builder ──────────────────────────────────────────────────────────────
 
+def _build_instructions(has_existing: bool) -> str:
+    """Build the instruction string embedded in the payload."""
+    action = "UPDATE the existing" if has_existing else "CREATE a new"
+    update_note = (
+        "The existing AGENTS.md content is provided in 'existing_agents_md'. "
+        "Preserve sections that are not affected by the detected changes. "
+        "Only rewrite sections where the analysis shows something changed."
+        if has_existing
+        else "Write the complete file from scratch using the analysis data."
+    )
+
+    return f"""
+TASK: {action} AGENTS.md file at the project root.
+
+## ABSOLUTE RULES — FOLLOW EXACTLY
+
+1. DO NOT read any source files. DO NOT call Read, Glob, Grep, Bash, or any
+   file-reading/executing tool. ALL information needed is already in this payload.
+   Reading files defeats the purpose of this tool and wastes context.
+
+2. DO NOT call generate_agents_md again. If you already received a payload,
+   that is your only input. Never retry or force a new scan.
+
+3. If the tool returned {{"status": "no_changes"}}: the AGENTS.md is already
+   up to date. Write nothing, call nothing. Just tell the user: "No changes
+   detected — AGENTS.md is up to date."
+
+4. DO NOT invent commands, tools, or configuration that are not present in
+   this payload. If a linter is not in config_files_found, do not mention it.
+   If a script is not in build_system.scripts, do not invent it.
+
+5. USE ONLY the data in this payload:
+   - metadata → project name, languages
+   - project_structure → directories, config files, CI files, test directories
+   - build_system → detected tools, package files, parsed scripts
+   - full_analysis → public symbols per file
+   - changes → semantic diffs (incremental scans)
+   - existing_agents_md → current content to preserve ({update_note})
+
+## FORMAT (agents.md standard — only include sections with real data)
+
+### Project Overview
+Architecture summary from directory layout and detected languages/frameworks.
+
+### Setup Commands
+Exact install commands from build_system. Use code blocks.
+
+### Development Workflow
+Run/build/watch commands from build_system.scripts only.
+
+### Testing Instructions
+From test_directories + config_files_found (jest/pytest/vitest configs) +
+build_system.scripts test entries.
+
+### Code Style
+Only if linting/formatting config files appear in config_files_found.
+Include exact commands. If nothing detected, omit this section entirely.
+
+### Build and Deployment
+Build commands and CI info from ci_files_found. Omit if empty.
+
+### Pull Request Guidelines
+Only if CI files found. Omit otherwise.
+
+## QUALITY BAR
+
+- Every command must be exact and runnable — no placeholders.
+- Omit any section where you have zero real data from the payload.
+- Do not invent tools, commands, or conventions not evidenced in the payload.
+""".strip()
+
+
 def build_payload(
     project_path: str | Path,
     config: ProjectConfig,
@@ -272,6 +342,7 @@ def build_payload(
     threshold = config.impact_threshold
     changes_payload = []
     full_analysis_payload = []
+    test_analysis_payload = []
 
     for change in changes:
         if change.status == "deleted":
@@ -336,10 +407,22 @@ def build_payload(
                 })
             else:
                 # No old analysis → treat as new
-                full_analysis_payload.append(_format_full(change.path, "modified", analysis))
+                entry = _format_full(change.path, "modified", analysis)
+                if _is_test_file(change.path):
+                    test_analysis_payload.append(entry)
+                else:
+                    full_analysis_payload.append(entry)
 
         elif change.status == "new":
-            full_analysis_payload.append(_format_full(change.path, "new", analysis))
+            entry = _format_full(change.path, "new", analysis)
+            if _is_test_file(change.path):
+                test_analysis_payload.append(entry)
+            else:
+                full_analysis_payload.append(entry)
+
+    # Collapse test files into per-directory summaries
+    if test_analysis_payload:
+        full_analysis_payload.extend(_summarize_test_files(test_analysis_payload))
 
     return {
         "metadata": {
@@ -355,36 +438,84 @@ def build_payload(
         "changes": changes_payload,
         "full_analysis": full_analysis_payload,
         "existing_agents_md": existing_agents_md,
-        "instructions": (
-            "Based on this analysis, generate (or update) the AGENTS.md following the agents.md standard. "
-            "The file must include: Project Overview, Setup Commands, Development Workflow, Testing Instructions, "
-            "Code Style, Build and Deployment, and any additional sections justified by the analysis. "
-            "If an AGENTS.md already exists, preserve its structure and only update sections affected by the "
-            "detected changes. Prioritize exact, actionable commands."
-        ),
+        "instructions": _build_instructions(existing_agents_md is not None),
     }
 
 
+_TEST_PATH_MARKERS = ("/tests/", "/test/", "/__tests__/", "/spec/", "/specs/")
+_TEST_NAME_PATTERNS = ("test_", "_test.", ".spec.", ".test.")
+
+
+def _is_test_file(path: str) -> bool:
+    name = Path(path).name
+    padded = f"/{path}/"
+    return (
+        name.startswith("test_")
+        or any(name.endswith(p) for p in ("_test.py", "_test.go", ".spec.ts", ".spec.js", ".test.ts", ".test.js"))
+        or any(marker in padded for marker in _TEST_PATH_MARKERS)
+    )
+
+
+def _is_public(sym) -> bool:
+    """Exclude private symbols — not useful for AGENTS.md."""
+    if sym.visibility in ("private", "protected"):
+        return False
+    if sym.name.startswith("_"):
+        return False
+    return True
+
+
 def _format_full(path: str, status: str, analysis: FileAnalysis) -> dict:
-    """Format a new/untracked file for the full_analysis section."""
+    """Format a file for full_analysis — public symbols only."""
     symbols_out = []
     for sym in analysis.symbols:
+        if not _is_public(sym):
+            continue
         if sym.kind == "class":
-            # Include method names as a list
-            entry = sym.model_dump(exclude={"decorators", "line_start", "line_end", "parent"})
-            entry["methods"] = [
-                s.name for s in analysis.symbols
-                if s.parent == sym.name and s.kind == "method"
-            ]
-            symbols_out.append(entry)
+            symbols_out.append({
+                "name": sym.name,
+                "kind": sym.kind,
+                "signature": sym.signature,
+                "decorators": sym.decorators,
+                "methods": [
+                    s.name for s in analysis.symbols
+                    if s.parent == sym.name and s.kind == "method" and _is_public(s)
+                ],
+            })
         elif sym.parent is None:
-            # Top-level non-class symbol
-            symbols_out.append(sym.model_dump(exclude={"line_start", "line_end"}))
+            symbols_out.append({
+                "name": sym.name,
+                "kind": sym.kind,
+                "signature": sym.signature,
+                "decorators": sym.decorators,
+            })
 
     return {
         "file": path,
         "status": status,
         "language": analysis.language,
         "symbols": symbols_out,
-        "imports": analysis.imports[:10],  # Cap for payload size
+        "imports": analysis.imports[:10],
     }
+
+
+def _summarize_test_files(entries: list[dict]) -> list[dict]:
+    """Replace individual test file entries with one summary per directory."""
+    by_dir: dict[str, list[dict]] = {}
+    for e in entries:
+        d = str(Path(e["file"]).parent)
+        by_dir.setdefault(d, []).append(e)
+
+    summaries = []
+    for d, files in sorted(by_dir.items()):
+        total_fns = sum(len(f.get("symbols", [])) for f in files)
+        languages = list({f["language"] for f in files})
+        summaries.append({
+            "directory": d + "/",
+            "kind": "test_directory_summary",
+            "file_count": len(files),
+            "test_function_count": total_fns,
+            "languages": languages,
+            "files": [f["file"] for f in files],
+        })
+    return summaries

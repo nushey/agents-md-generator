@@ -1,5 +1,6 @@
-"""Cache manager: reads/writes .agents-cache.json."""
+"""Cache manager: reads/writes per-project cache in ~/.cache/agents-md-generator/."""
 
+import hashlib
 import json
 import logging
 import subprocess
@@ -10,12 +11,25 @@ from .models import CacheData, CachedFile
 
 logger = logging.getLogger(__name__)
 
-CACHE_FILE = ".agents-cache.json"
+CACHE_FILENAME = "cache.json"
+
+
+def get_project_cache_dir(project_path: str | Path) -> Path:
+    """Return ~/.cache/agents-md-generator/<project-hash>/, creating it if needed.
+
+    The project hash is a SHA-256 of the absolute project path — unique per
+    project, stable as long as the directory doesn't move.
+    """
+    abs_path = str(Path(project_path).resolve())
+    project_hash = hashlib.sha256(abs_path.encode()).hexdigest()[:16]
+    cache_dir = Path.home() / ".cache" / "agents-md-generator" / project_hash
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
 def load_cache(project_path: str | Path) -> CacheData | None:
     """Load cache from disk. Returns None if missing or corrupt."""
-    cache_path = Path(project_path) / CACHE_FILE
+    cache_path = get_project_cache_dir(project_path) / CACHE_FILENAME
     if not cache_path.exists():
         return None
     try:
@@ -28,7 +42,7 @@ def load_cache(project_path: str | Path) -> CacheData | None:
 
 def save_cache(project_path: str | Path, data: CacheData) -> None:
     """Persist cache to disk."""
-    cache_path = Path(project_path) / CACHE_FILE
+    cache_path = get_project_cache_dir(project_path) / CACHE_FILENAME
     try:
         cache_path.write_text(
             data.model_dump_json(indent=2),

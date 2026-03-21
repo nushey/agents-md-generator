@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from .ast_analyzer import analyze_changes
 from .cache import (
     get_current_commit,
+    get_project_cache_dir,
     is_cache_valid,
     load_cache,
     make_empty_cache,
@@ -38,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PAYLOAD_FILENAME = ".agents-payload.json"
+PAYLOAD_FILENAME = "payload.json"
 # Lines per Read tool call (Claude's Read tool works well at 2000 lines/call)
 CHUNK_LINES = 2000
 
@@ -174,7 +175,7 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
     logger.info("Cache saved with %d entries", len(new_cache.files))
 
     # 7. Write payload to disk — never send it inline over MCP
-    payload_path = project_path / PAYLOAD_FILENAME
+    payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
     payload_json = json.dumps(payload, indent=2, default=str)
     payload_path.write_text(payload_json, encoding="utf-8")
     payload_lines = payload_json.count("\n") + 1

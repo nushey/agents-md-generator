@@ -105,11 +105,7 @@ Open your Claude Code config file and add the `agents-md` server to `mcpServers`
   "mcpServers": {
     "agents-md": {
       "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/nushey/agents-md-generator",
-        "agents-md-generator"
-      ]
+      "args": ["agents-md-generator"]
     }
   }
 }

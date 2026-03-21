@@ -12,7 +12,7 @@ Python · C# · TypeScript · JavaScript · Go · Java · Rust · Ruby
 
 ## Installation
 
-See [INSTALLATION.md](./INSTALLATION.md) for the full guide including prerequisites and troubleshooting.
+See [INSTALLATION.md](https://github.com/nushey/agents-md-generator/blob/main/INSTALLATION.md) for the full guide including prerequisites and troubleshooting.
 
 **Requirements:** Python 3.11+, [uv](https://github.com/astral-sh/uv), Git, Claude Code.
 
@@ -25,11 +25,7 @@ Add this to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` 
   "mcpServers": {
     "agents-md": {
       "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/nushey/agents-md-generator",
-        "agents-md-generator"
-      ]
+      "args": ["agents-md-generator"]
     }
   }
 }

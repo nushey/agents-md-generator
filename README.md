@@ -12,47 +12,30 @@ Python · C# · TypeScript · JavaScript · Go · Java · Rust · Ruby
 
 ## Installation
 
-For full step-by-step instructions including prerequisites, platform-specific setup (Linux and Windows), and troubleshooting, see [INSTALLATION.md](./INSTALLATION.md).
+See [INSTALLATION.md](./INSTALLATION.md) for the full guide including prerequisites and troubleshooting.
 
-### Quick start
+**Requirements:** Python 3.11+, [uv](https://github.com/astral-sh/uv), Git, Claude Code.
 
-```bash
-# With uvx (recommended — no virtual env needed)
-uvx agents-md-generator
+### Claude Code configuration
 
-# With pip
-pip install agents-md-generator
-```
-
----
-
-## Claude Code Configuration
-
-Add to your `.claude.json`:
+Add this to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
 
 ```json
 {
   "mcpServers": {
     "agents-md": {
       "command": "uvx",
-      "args": ["agents-md-generator"]
+      "args": [
+        "--from",
+        "git+https://github.com/nushey/agents-md-generator",
+        "agents-md-generator"
+      ]
     }
   }
 }
 ```
 
-Or with a local install:
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "python",
-      "args": ["-m", "agents_md_mcp.server"]
-    }
-  }
-}
-```
+Restart Claude Code — `uvx` downloads the package automatically on first run.
 
 ---
 

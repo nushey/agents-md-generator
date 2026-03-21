@@ -1,41 +1,32 @@
 # Installation Guide
 
-This guide covers full installation of `agents-md-generator` on Linux and Windows, including all prerequisites.
+Step-by-step setup for Linux and Windows.
 
 ---
 
 ## Prerequisites
 
-### Python 3.10 or later
-
-`agents-md-generator` requires Python 3.10+. Python 3.12 is recommended.
+### 1. Python 3.11 or later
 
 **Linux**
 
 ```bash
-# Check your current version
+# Verify current version
 python3 --version
 
 # Ubuntu / Debian
-sudo apt update && sudo apt install python3 python3-pip
+sudo apt update && sudo apt install python3
 
 # Fedora / RHEL
-sudo dnf install python3 python3-pip
+sudo dnf install python3
 
 # Arch
-sudo pacman -S python python-pip
-
-# Or install via pyenv for version management
-curl https://pyenv.run | bash
-pyenv install 3.12
-pyenv global 3.12
+sudo pacman -S python
 ```
 
 **Windows**
 
 Download and run the installer from [python.org/downloads](https://www.python.org/downloads/). During installation, check **"Add Python to PATH"**.
-
-Verify the installation:
 
 ```powershell
 python --version
@@ -43,9 +34,33 @@ python --version
 
 ---
 
-### Git
+### 2. uv (includes uvx)
 
-Required for incremental scanning. `agents-md-generator` uses `git ls-files` to enumerate tracked files and `git rev-parse HEAD` to track the cache baseline.
+`uvx` downloads and runs Python tools in isolated environments — no virtual environment management needed.
+
+**Linux / macOS**
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Restart your terminal after installing, then verify:
+
+```bash
+uvx --version
+```
+
+---
+
+### 3. Git
+
+Required for incremental scanning. `agents-md-generator` uses `git ls-files` to enumerate tracked files.
 
 **Linux**
 
@@ -62,168 +77,74 @@ sudo pacman -S git
 
 **Windows**
 
-Download from [git-scm.com](https://git-scm.com/download/win) and run the installer. Use the default options. Git Bash is not required — the standard Windows installer is sufficient.
+Download from [git-scm.com](https://git-scm.com/download/win) and run the installer with default options.
 
 ---
 
-### Claude Code
+### 4. Claude Code
 
-`agents-md-generator` is an MCP server for [Claude Code](https://claude.ai/code). Install Claude Code first and verify it works before proceeding.
-
----
-
-## Installation Methods
-
-### Method 1 — uvx (recommended)
-
-`uvx` runs Python tools in isolated environments without requiring you to manage a virtual environment. It is part of [uv](https://github.com/astral-sh/uv), the fast Python package manager.
-
-**Install uv:**
-
-```bash
-# Linux / macOS
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Restart your terminal after installing uv, then verify:
-
-```bash
-uv --version
-uvx --version
-```
-
-**Run the MCP server with uvx:**
-
-```bash
-uvx agents-md-generator
-```
-
-uvx automatically downloads the package and its dependencies on first run and caches them locally. No `pip install` needed.
+Install [Claude Code](https://claude.ai/code) and verify it works before proceeding.
 
 ---
 
-### Method 2 — pip
+## Configure Claude Code
 
-If you prefer a standard pip installation:
+Open your Claude Code config file and add the `agents-md` server to `mcpServers`.
 
-```bash
-pip install agents-md-generator
-```
-
-To install into a virtual environment (recommended for pip installs):
-
-```bash
-# Linux
-python3 -m venv .venv
-source .venv/bin/activate
-pip install agents-md-generator
-
-# Windows
-python -m venv .venv
-.venv\Scripts\activate
-pip install agents-md-generator
-```
-
----
-
-## Claude Code MCP Configuration
-
-Once installed, register the server in Claude Code's MCP configuration.
-
-### Locate the config file
+### Config file location
 
 | Platform | Path |
 |----------|------|
-| Linux | `~/.claude.json` |
+| Linux / macOS | `~/.claude.json` |
 | Windows | `%USERPROFILE%\.claude.json` |
 
-### With uvx
+### Add this block
 
 ```json
 {
   "mcpServers": {
     "agents-md": {
       "command": "uvx",
-      "args": ["agents-md-generator"]
+      "args": [
+        "--from",
+        "git+https://github.com/nushey/agents-md-generator",
+        "agents-md-generator"
+      ]
     }
   }
 }
 ```
 
-### With pip (global install)
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "python",
-      "args": ["-m", "agents_md_mcp.server"]
-    }
-  }
-}
-```
-
-### With pip (virtual environment)
-
-**Linux:**
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "/path/to/your/.venv/bin/python",
-      "args": ["-m", "agents_md_mcp.server"]
-    }
-  }
-}
-```
-
-**Windows:**
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "C:\\path\\to\\your\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "agents_md_mcp.server"]
-    }
-  }
-}
-```
+If `mcpServers` already exists in your config, add only the `"agents-md"` entry inside it.
 
 ---
 
-## Verification
+## Verify
 
-Restart Claude Code after editing the config file. Then ask:
+Restart Claude Code after saving the config. On first start, `uvx` will download the package and its dependencies automatically — this takes a few seconds only once.
+
+Then open any project and ask:
 
 > "Generate the AGENTS.md for this project"
 
-Claude should call `generate_agents_md` automatically. If the tool does not appear, check the MCP server logs:
+Claude should call `generate_agents_md` automatically. If the tool does not appear:
 
-```bash
-# The server logs to stderr — visible in Claude Code's MCP log panel
-# or by running it directly:
-uvx agents-md-generator
-```
+1. Verify the JSON is valid — no trailing commas, correct quotes
+2. Restart Claude Code completely
+3. Check the MCP panel in Claude Code for server errors
 
 ---
 
 ## Runtime Files
 
-`agents-md-generator` writes no files to your project. All runtime artifacts are stored in the user cache directory:
+`agents-md-generator` writes no files to your project. All runtime artifacts live in the user cache directory:
 
 | Platform | Path |
 |----------|------|
-| Linux | `~/.cache/agents-md-generator/<project-hash>/` |
-| Windows | `%LOCALAPPDATA%\agents-md-generator\<project-hash>\` |
+| Linux / macOS | `~/.cache/agents-md-generator/<project-hash>/` |
+| Windows | `%USERPROFILE%\.cache\agents-md-generator\<project-hash>\` |
 
-> **Note:** On Windows, the server currently uses `~/.cache/agents-md-generator/` (the user's home directory). Native `%LOCALAPPDATA%` support is planned.
-
-Each project gets its own subdirectory identified by a hash of its absolute path. Files stored:
+Each project gets its own subdirectory identified by a hash of its absolute path.
 
 | File | Purpose |
 |------|---------|
@@ -236,23 +157,14 @@ Each project gets its own subdirectory identified by a hash of its absolute path
 
 ### `uvx: command not found`
 
-uv is not installed or not on your PATH. Follow the uv installation steps above and restart your terminal.
-
-### `python: command not found` (Linux)
-
-Try `python3` instead, or install Python via your package manager. If using a virtual environment, make sure it is activated.
+uv is not installed or not on your PATH. Run the install command above and restart your terminal.
 
 ### Tool does not appear in Claude Code
 
-1. Verify the JSON in your `.claude.json` is valid (no trailing commas, correct quotes)
-2. Confirm the `command` path exists and is executable
-3. Restart Claude Code completely after any config change
-4. Run the server command directly in a terminal to see any startup errors
+- Confirm the JSON in `.claude.json` is valid
+- Restart Claude Code completely after any config change
+- Check that `uvx --version` works in your terminal
 
 ### Cache is stale after moving the project directory
 
-The cache is keyed by the project's absolute path. Moving the directory produces a new hash and triggers a cold start (full rescan). This is expected behavior.
-
-### `force_full_scan` not working as expected
-
-`force_full_scan: true` bypasses the cache entirely and rescans all files. Use it only when the cache is suspected to be out of sync. For improving an existing `AGENTS.md` without code changes, leave it as `false`.
+The cache is keyed by the project's absolute path. Moving the directory triggers a cold start (full rescan) — this is expected.

@@ -27,7 +27,7 @@ from .cache import (
 from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
-from .context_builder import _is_public
+from .context_builder import _is_public, _is_test_file
 from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
@@ -153,19 +153,22 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
             continue
         analysis = new_analyses.get(change.path)
         if analysis and change.new_hash:
+            # Test files: store only the hash for change detection — symbols
+            # are never used (payload collapses them into directory summaries).
+            symbols = [] if _is_test_file(change.path) else [
+                CachedSymbol(
+                    name=s.name,
+                    kind=s.kind,
+                    visibility=s.visibility,
+                    signature=s.signature,
+                    decorators=s.decorators,
+                )
+                for s in analysis.symbols
+                if _is_public(s)
+            ]
             new_cache.files[change.path] = CachedFile(
                 hash=change.new_hash,
-                symbols=[
-                    CachedSymbol(
-                        name=s.name,
-                        kind=s.kind,
-                        visibility=s.visibility,
-                        signature=s.signature,
-                        decorators=s.decorators,
-                    )
-                    for s in analysis.symbols
-                    if _is_public(s)
-                ],
+                symbols=symbols,
             )
     save_cache(project_path, new_cache)
     logger.info("Cache saved with %d entries", len(new_cache.files))

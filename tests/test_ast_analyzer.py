@@ -161,8 +161,8 @@ def _make_symbol(name: str, sig: str = "sig") -> SymbolInfo:
 
 
 def test_diff_added() -> None:
-    old = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo")])
-    new = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo"), _make_symbol("bar")])
+    old = [_make_symbol("foo")]
+    new = [_make_symbol("foo"), _make_symbol("bar")]
     diff = diff_analysis(old, new)
     assert len(diff.added) == 1
     assert diff.added[0].name == "bar"
@@ -170,25 +170,24 @@ def test_diff_added() -> None:
 
 
 def test_diff_removed() -> None:
-    old = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo"), _make_symbol("bar")])
-    new = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo")])
+    old = [_make_symbol("foo"), _make_symbol("bar")]
+    new = [_make_symbol("foo")]
     diff = diff_analysis(old, new)
     assert len(diff.removed) == 1
     assert diff.removed[0].name == "bar"
 
 
 def test_diff_modified_signature() -> None:
-    old = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo", "def foo()")])
-    new = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo", "def foo(x: int)")])
+    old = [_make_symbol("foo", "def foo()")]
+    new = [_make_symbol("foo", "def foo(x: int)")]
     diff = diff_analysis(old, new)
     assert len(diff.modified) == 1
     assert diff.modified[0].signature == "def foo(x: int)"
 
 
 def test_diff_no_changes() -> None:
-    sym = _make_symbol("foo", "def foo()")
-    old = FileAnalysis(path="f.py", language="python", symbols=[sym])
-    new = FileAnalysis(path="f.py", language="python", symbols=[_make_symbol("foo", "def foo()")])
+    old = [_make_symbol("foo", "def foo()")]
+    new = [_make_symbol("foo", "def foo()")]
     diff = diff_analysis(old, new)
     assert diff.added == []
     assert diff.removed == []

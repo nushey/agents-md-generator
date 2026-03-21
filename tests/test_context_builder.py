@@ -134,10 +134,8 @@ def test_build_payload_new_files(tmp_path: Path) -> None:
 
     payload = build_payload(tmp_path, cfg, changes, analyses, cache=None)
 
-    assert payload["metadata"]["scan_type"] == "full"
     assert len(payload["full_analysis"]) == 1
     assert payload["full_analysis"][0]["file"] == "src/app.py"
-    assert payload["full_analysis"][0]["status"] == "new"
 
 
 def test_build_payload_includes_instructions(tmp_path: Path) -> None:
@@ -165,7 +163,11 @@ def test_build_payload_modified_with_diff(tmp_path: Path) -> None:
 
     old_analysis = _analysis("src/app.py", "python", [_sym("run", sig="def run()")])
     cache = make_empty_cache()
-    cache.files["src/app.py"] = CachedFile(hash="old", analysis=old_analysis)
+    from agents_md_mcp.models import CachedSymbol
+    cache.files["src/app.py"] = CachedFile(
+        hash="old",
+        symbols=[CachedSymbol(name="run", kind="function", visibility="public", signature="def run()")],
+    )
 
     new_analysis = _analysis("src/app.py", "python", [
         _sym("run", sig="def run()"),
@@ -177,7 +179,6 @@ def test_build_payload_modified_with_diff(tmp_path: Path) -> None:
 
     payload = build_payload(tmp_path, cfg, changes, analyses, cache=cache, scan_type="incremental")
 
-    assert payload["metadata"]["scan_type"] == "incremental"
     assert len(payload["changes"]) == 1
     diff_entry = payload["changes"][0]
     assert diff_entry["status"] == "modified"

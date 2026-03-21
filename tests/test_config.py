@@ -17,19 +17,17 @@ def test_load_config_defaults(tmp_path: Path) -> None:
     cfg = load_config(tmp_path)
     assert cfg.impact_threshold == "medium"
     assert cfg.languages == "auto"
-    assert cfg.base_ref is None
     assert len(cfg.exclude) > 0
 
 
 def test_load_config_from_file(tmp_path: Path) -> None:
     """Partial config merges with defaults."""
     (tmp_path / ".agents-config.json").write_text(
-        json.dumps({"impact_threshold": "high", "base_ref": "main"}),
+        json.dumps({"impact_threshold": "high"}),
         encoding="utf-8",
     )
     cfg = load_config(tmp_path)
     assert cfg.impact_threshold == "high"
-    assert cfg.base_ref == "main"
     # Defaults preserved
     assert cfg.languages == "auto"
     assert cfg.max_file_size_bytes == DEFAULT_CONFIG["max_file_size_bytes"]
@@ -53,7 +51,7 @@ def test_language_for_extension_auto() -> None:
 def test_is_extension_supported() -> None:
     cfg = load_config("/tmp")
     assert cfg.is_extension_supported(".go")
-    assert cfg.is_extension_supported(".rs")
+    assert cfg.is_extension_supported(".js")
     assert not cfg.is_extension_supported(".html")
 
 

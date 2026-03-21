@@ -98,7 +98,13 @@ Open your Claude Code config file and add the `agents-md` server to `mcpServers`
 | Linux / macOS | `~/.claude.json` |
 | Windows | `%USERPROFILE%\.claude.json` |
 
-### Add this block
+### Quick install
+
+```bash
+claude mcp add agents-md uvx agents-md-generator
+```
+
+### Manual config
 
 ```json
 {

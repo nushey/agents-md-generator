@@ -18,7 +18,13 @@ See [INSTALLATION.md](https://github.com/nushey/agents-md-generator/blob/main/IN
 
 ### Claude Code configuration
 
-Add this to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
+Run this command to install:
+
+```bash
+claude mcp add agents-md uvx agents-md-generator
+```
+
+Or add it manually to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
 
 ```json
 {

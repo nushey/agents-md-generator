@@ -1,7 +1,3 @@
-# Cache and temp files
-.agents-cache.json
-.agents-payload.json
-
 # Python
 .venv/
 __pycache__/

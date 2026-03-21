@@ -12,15 +12,15 @@ Python · C# · TypeScript · JavaScript · Go · Java · Rust · Ruby
 
 ## Installation
 
-### With uvx (recommended)
+For full step-by-step instructions including prerequisites, platform-specific setup (Linux and Windows), and troubleshooting, see [INSTALLATION.md](./INSTALLATION.md).
+
+### Quick start
 
 ```bash
+# With uvx (recommended — no virtual env needed)
 uvx agents-md-generator
-```
 
-### With pip
-
-```bash
+# With pip
 pip install agents-md-generator
 ```
 
@@ -144,7 +144,7 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `impact_threshold` | `"medium"` | Minimum change impact to include in incremental payload: `"high"`, `"medium"`, or `"low"` |
+| `impact_threshold` | `"medium"` | Minimum change impact to include in incremental payload (see [Impact Threshold](#impact-threshold)) |
 | `exclude` | (see above) | Glob patterns to exclude from analysis |
 | `include` | `[]` | If non-empty, only analyze files matching these patterns |
 | `languages` | `"auto"` | `"auto"` detects all supported languages, or pass a list like `["typescript", "python"]` |
@@ -152,6 +152,22 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 | `max_file_size_bytes` | `1048576` | Files larger than this are skipped (default: 1 MB) |
 
 You can commit `.agents-config.json` to share exclusion rules and thresholds with your team.
+
+### Impact Threshold
+
+The `impact_threshold` controls which symbol changes are included in incremental scan payloads. Changes below the threshold are silently ignored — `AGENTS.md` is not regenerated for them.
+
+| Level | What qualifies |
+|-------|---------------|
+| `"high"` | HTTP endpoints (decorated routes), adding or removing a class / interface / struct, removing a public method |
+| `"medium"` | Adding a new public function, changing a public method's signature |
+| `"low"` | Any other public symbol change (e.g. adding a non-route method, minor signature tweaks) |
+
+**Choosing a threshold:**
+
+- `"high"` — Only regenerate `AGENTS.md` for breaking or structural changes. Best for large, stable codebases where minor additions are frequent.
+- `"medium"` _(default)_ — Regenerate when the public API surface grows or changes. Suitable for most projects.
+- `"low"` — Regenerate on any public symbol change. Best for early-stage projects where the architecture is still evolving.
 
 ---
 

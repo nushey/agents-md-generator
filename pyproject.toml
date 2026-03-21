@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agents-md-generator"
-version = "0.1.1"
+version = "0.1.2"
 description = "MCP server that analyzes codebases and generates AGENTS.md files"
 readme = "README.md"
 license = { text = "MIT" }

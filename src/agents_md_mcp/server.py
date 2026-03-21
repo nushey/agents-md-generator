@@ -27,6 +27,7 @@ from .cache import (
 from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
+from .context_builder import _is_public
 from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
@@ -163,6 +164,7 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
                         decorators=s.decorators,
                     )
                     for s in analysis.symbols
+                    if _is_public(s)
                 ],
             )
     save_cache(project_path, new_cache)

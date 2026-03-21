@@ -426,7 +426,7 @@ def build_payload(
                 old_symbols = cache.files[change.path].symbols
 
             if old_symbols is not None:
-                diff = diff_analysis(old_symbols, analysis.symbols)
+                diff = diff_analysis(old_symbols, [s for s in analysis.symbols if _is_public(s)])
                 # Filter by impact threshold
                 def impact_entry(sym, ctype):
                     imp = classify_impact(sym, ctype)

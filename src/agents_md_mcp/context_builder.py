@@ -3,7 +3,7 @@
 import fnmatch
 import json
 import logging
-from datetime import datetime, timezone
+import re
 from pathlib import Path
 
 from .ast_analyzer import classify_impact, diff_analysis
@@ -219,6 +219,133 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     }
 
 
+# ── Environment variable detection ───────────────────────────────────────────
+
+_ENV_PATTERNS: dict[str, re.Pattern] = {
+    "javascript": re.compile(r'process\.env\.([A-Z][A-Z0-9_]+)'),
+    "typescript": re.compile(r'process\.env\.([A-Z][A-Z0-9_]+)'),
+    "python":     re.compile(r'os\.(?:environ(?:\.get)?\s*\(\s*[\'"]|getenv\s*\(\s*[\'"])([A-Z][A-Z0-9_]+)'),
+    "go":         re.compile(r'os\.Getenv\(\s*"([A-Z][A-Z0-9_]+)'),
+    "ruby":       re.compile(r'ENV\s*\[\s*[\'"]([A-Z][A-Z0-9_]+)'),
+    "rust":       re.compile(r'env!\s*\(\s*"([A-Z][A-Z0-9_]+)|var\s*\(\s*"([A-Z][A-Z0-9_]+)'),
+}
+
+_ENV_DOTFILES = (".env.example", ".env.template", ".env.sample", ".env.test")
+_ENV_VAR_RE = re.compile(r'^([A-Z][A-Z0-9_]+)\s*=')
+
+
+def _detect_env_vars(root: Path, config: ProjectConfig) -> list[str]:
+    """Scan source files and .env examples for environment variable names."""
+    gitignore_spec = load_gitignore_spec(root)
+    found: set[str] = set()
+
+    # Scan source files for process.env.X / os.environ / etc.
+    try:
+        for item in root.rglob("*"):
+            if not item.is_file():
+                continue
+            rel = str(item.relative_to(root))
+            if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
+                continue
+            lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
+            pattern = _ENV_PATTERNS.get(lang) if lang else None
+            if pattern is None:
+                continue
+            if item.stat().st_size > config.max_file_size_bytes:
+                continue
+            try:
+                content = item.read_text(encoding="utf-8", errors="replace")
+                for match in pattern.finditer(content):
+                    # rust pattern has two groups; take whichever matched
+                    var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)
+                    if var:
+                        found.add(var)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+    # Scan .env example files at root — most reliable source of truth
+    for name in _ENV_DOTFILES:
+        env_file = root / name
+        if not env_file.exists():
+            continue
+        try:
+            for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = _ENV_VAR_RE.match(line.strip())
+                if m:
+                    found.add(m.group(1))
+        except OSError:
+            continue
+
+    return sorted(found)
+
+
+# ── Entry point detection ─────────────────────────────────────────────────────
+
+_ENTRY_STEMS = {"index", "main", "app", "server", "program", "bootstrap", "startup"}
+
+_ROLE_HINTS: list[tuple[str, str]] = [
+    ("electron",   "Electron main process"),
+    ("preload",    "Electron preload script"),
+    ("routes",     "Route definitions"),
+    ("api",        "API module index"),
+    ("server",     "HTTP server bootstrap"),
+    ("backend",    "Backend entry point"),
+    ("frontend",   "Frontend entry point"),
+]
+
+
+def _infer_entry_role(rel: str, stem: str) -> str:
+    lower = rel.lower()
+    for hint, label in _ROLE_HINTS:
+        if hint in lower:
+            return label
+    if stem == "main":
+        return "Application entry point"
+    if stem == "app":
+        return "Application setup"
+    if stem == "server":
+        return "HTTP server bootstrap"
+    return "Module index"
+
+
+def _detect_entry_points(root: Path, config: ProjectConfig) -> list[dict]:
+    """Detect bootstrap / entry-point files (index, main, app, server, …)."""
+    gitignore_spec = load_gitignore_spec(root)
+    entries = []
+    seen_dirs: set[str] = set()
+
+    try:
+        for item in root.rglob("*"):
+            if not item.is_file():
+                continue
+            rel = str(item.relative_to(root))
+            if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
+                continue
+            if not config.is_extension_supported(item.suffix.lower()):
+                continue
+            if _is_test_file(rel):
+                continue
+            stem = item.stem.lower()
+            if stem not in _ENTRY_STEMS:
+                continue
+            # One entry per directory — avoid index.js + index.ts duplicates
+            parent = str(item.parent.relative_to(root))
+            dir_key = f"{parent}/{stem}"
+            if dir_key in seen_dirs:
+                continue
+            seen_dirs.add(dir_key)
+            entries.append({
+                "file": rel,
+                "role": _infer_entry_role(rel, stem),
+            })
+    except OSError:
+        pass
+
+    return sorted(entries, key=lambda e: e["file"])
+
+
 # ── Impact threshold filtering ────────────────────────────────────────────────
 
 _THRESHOLD_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -263,7 +390,9 @@ TASK: {action} AGENTS.md file at the project root.
    - metadata → project name, detected languages
    - project_structure → directories, config files, CI files, test directories
    - build_system → detected tools, package files, parsed scripts
-   - full_analysis → public symbols and imports per file (use to INFER patterns)
+   - entry_points → bootstrap/main files per package with their role
+   - env_vars → environment variables referenced in source or .env.example files
+   - full_analysis → public symbols per file (use to INFER patterns)
    - changes → semantic diffs (incremental scans only)
    - existing_agents_md → current content to preserve or update ({update_note})
 
@@ -336,8 +465,14 @@ THE most actionable section for AI agents. Synthesize from full_analysis:
   2. Create <entity>Service.js in src/services/. 3. Add hook in src/hooks/.
   4. Register in DataContext.")
 
+### Environment Variables
+Only if env_vars is non-empty. List each variable with a one-line description
+of its purpose inferred from its name and the files it appears in.
+If a .env.example is present, mention it explicitly.
+
 ### Setup Commands
 Exact install and environment commands from build_system. Fenced code blocks.
+Reference entry_points to explain where bootstrap happens.
 
 ### Development Workflow
 Run/build/watch commands from build_system.scripts. Fenced code blocks.
@@ -486,17 +621,18 @@ def build_payload(
     if test_analysis_payload:
         full_analysis_payload.extend(_summarize_test_files(test_analysis_payload))
 
+    env_vars = _detect_env_vars(root, config)
+    entry_points = _detect_entry_points(root, config)
+
     return {
         "metadata": {
             "project_name": project_name,
-            "scan_type": scan_type,
-            "files_analyzed": len(new_analyses),
-            "files_total": len(changes),
             "languages_detected": list({a.language for a in new_analyses.values()}),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
         },
         "project_structure": structure,
         "build_system": build_system,
+        "entry_points": entry_points,
+        "env_vars": env_vars,
         "changes": changes_payload,
         "full_analysis": full_analysis_payload,
         "existing_agents_md": existing_agents_md,
@@ -538,7 +674,7 @@ def _is_public(sym) -> bool:
     return True
 
 
-def _format_full(path: str, status: str, analysis: FileAnalysis) -> dict:
+def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict:
     """Format a file for full_analysis — public symbols only."""
     symbols_out = []
     for sym in analysis.symbols:
@@ -565,10 +701,8 @@ def _format_full(path: str, status: str, analysis: FileAnalysis) -> dict:
 
     return {
         "file": path,
-        "status": status,
         "language": analysis.language,
         "symbols": symbols_out,
-        "imports": analysis.imports[:10],
     }
 
 

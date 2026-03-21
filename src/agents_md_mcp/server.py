@@ -64,7 +64,7 @@ async def generate_agents_md(params: GenerateAgentsMdInput) -> str:
     a small response with step-by-step instructions for Claude Code to read the
     payload and write AGENTS.md — no large data travels over the MCP wire.
 
-    Supported languages: Python, C#, TypeScript, JavaScript, Go, Java, Rust, Ruby.
+    Supported languages: Python, C#, TypeScript, JavaScript, Go.
 
     Args:
         params (GenerateAgentsMdInput): Input parameters containing:

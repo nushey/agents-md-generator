@@ -29,7 +29,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "languages": "auto",
     "impact_threshold": "medium",
     "agents_md_path": "./AGENTS.md",
-    "base_ref": None,
     "max_file_size_bytes": 1_048_576,  # 1MB
 }
 
@@ -42,9 +41,6 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".js": "javascript",
     ".jsx": "javascript",
     ".go": "go",
-    ".java": "java",
-    ".rs": "rust",
-    ".rb": "ruby",
 }
 
 
@@ -57,7 +53,6 @@ class ProjectConfig:
         self.languages: str | list[str] = raw.get("languages", DEFAULT_CONFIG["languages"])
         self.impact_threshold: str = raw.get("impact_threshold", DEFAULT_CONFIG["impact_threshold"])
         self.agents_md_path: str = raw.get("agents_md_path", DEFAULT_CONFIG["agents_md_path"])
-        self.base_ref: Optional[str] = raw.get("base_ref", DEFAULT_CONFIG["base_ref"])
         self.max_file_size_bytes: int = raw.get(
             "max_file_size_bytes", DEFAULT_CONFIG["max_file_size_bytes"]
         )

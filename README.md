@@ -6,7 +6,7 @@ MCP server that analyzes codebases with [tree-sitter](https://tree-sitter.github
 
 ## Supported Languages
 
-Python · C# · TypeScript · JavaScript · Go · Java · Rust · Ruby
+Python · C# · TypeScript · JavaScript · Go
 
 ---
 

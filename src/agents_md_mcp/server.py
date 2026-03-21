@@ -67,7 +67,10 @@ async def generate_agents_md(params: GenerateAgentsMdInput) -> str:
     Args:
         params (GenerateAgentsMdInput): Input parameters containing:
             - project_path (str): Path to the project root (default: ".")
-            - force_full_scan (bool): Ignore cache, rescan everything (default: False)
+            - force_full_scan (bool): Ignore cache, rescan everything (default: False).
+              Set to True ONLY when the user explicitly asks to rescan from scratch.
+              When asked to improve, review, or update an existing AGENTS.md,
+              always use force_full_scan=False — the cache is valid and sufficient.
 
     Returns:
         str: Small JSON response with payload file path and exact instructions
@@ -111,9 +114,12 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
         return json.dumps({
             "status": "no_changes",
             "message": (
-                "No changes detected since the last scan. AGENTS.md is already up to date. "
-                "STOP HERE — do not call this tool again, do not read any files, "
-                "do not force a new scan. Tell the user: AGENTS.md is current."
+                "No source file changes detected since the last scan. "
+                "STOP and report this to the user. Do not read any files. Do not rewrite anything. "
+                "Tell the user exactly this: 'No se detectaron cambios en el código fuente desde el último scan. "
+                "¿Querés que mejore el contenido del AGENTS.md existente de todas formas?' "
+                "Then WAIT for the user to respond before doing anything else. "
+                "Do NOT call this tool again with force_full_scan=True unless the user explicitly requests a full rescan."
             ),
         })
 

@@ -244,61 +244,123 @@ def _build_instructions(has_existing: bool) -> str:
     return f"""
 TASK: {action} AGENTS.md file at the project root.
 
-## ABSOLUTE RULES — FOLLOW EXACTLY
+## ABSOLUTE RULES — NEVER BREAK THESE
 
-1. DO NOT read any source files. DO NOT call Read, Glob, Grep, Bash, or any
-   file-reading/executing tool. ALL information needed is already in this payload.
-   Reading files defeats the purpose of this tool and wastes context.
+1. DO NOT read any source files. Do not call Read, Glob, Grep, Bash, or any
+   file-reading tool. ALL information needed is already in this payload.
 
-2. DO NOT call generate_agents_md again. If you already received a payload,
-   that is your only input. Never retry or force a new scan.
+2. DO NOT call generate_agents_md again.
 
-3. If the tool returned {{"status": "no_changes"}}: the AGENTS.md is already
-   up to date. Write nothing, call nothing. Just tell the user: "No changes
-   detected — AGENTS.md is up to date."
+3. DO NOT enumerate files. Never write tables or bullet lists of filenames with
+   their exports. If you find yourself writing "| clients.api.js | getClients, addClient |"
+   — STOP. That is wrong. AGENTS.md is not a file index.
 
-4. DO NOT invent commands, tools, or configuration that are not present in
-   this payload. If a linter is not in config_files_found, do not mention it.
-   If a script is not in build_system.scripts, do not invent it.
+4. DO NOT invent commands, tools, or conventions absent from this payload.
+   If a script is not in build_system.scripts, do not mention it.
+   If a linter is not in config_files_found, do not claim it exists.
 
 5. USE ONLY the data in this payload:
-   - metadata → project name, languages
+   - metadata → project name, detected languages
    - project_structure → directories, config files, CI files, test directories
    - build_system → detected tools, package files, parsed scripts
-   - full_analysis → public symbols per file
-   - changes → semantic diffs (incremental scans)
-   - existing_agents_md → current content to preserve ({update_note})
+   - full_analysis → public symbols and imports per file (use to INFER patterns)
+   - changes → semantic diffs (incremental scans only)
+   - existing_agents_md → current content to preserve or update ({update_note})
 
-## FORMAT (agents.md standard — only include sections with real data)
+## WHAT AGENTS.MD IS — READ THIS BEFORE WRITING ANYTHING
+
+AGENTS.md is a "README for AI coding agents." It gives agents the architectural
+context and operational rules they need to contribute effectively WITHOUT
+exploring the codebase themselves.
+
+It answers:
+  - How is this system structured and why?
+  - What conventions must I follow when adding code?
+  - Where exactly do I put a new file of type X?
+  - What commands do I run to build, test, lint?
+  - What must I never break?
+
+It is NOT documentation. It is NOT a changelog. It is NOT a file index.
+
+## HOW TO USE THE PAYLOAD DATA
+
+### `full_analysis` — SYNTHESIZE patterns, never list files
+
+Examine the file paths and symbol names to detect recurring patterns, then
+document those patterns as RULES.
+
+Examples of synthesis (infer these from the data, do not hard-code them):
+- Naming convention: if you see `clients.api.js`, `orders.api.js`, `transports.api.js`
+  → rule: "API clients follow the pattern `<entity>.api.js` in `src/api/`"
+- Export convention: if every *.api.js exports getX, addX, modifyX, deleteX
+  → rule: "API modules export CRUD functions named getX / addX / modifyX / deleteX"
+- Layer pattern: if api/ → services/ → hooks/ → context/ → pages/ appears
+  → document the data flow as a pipeline, not as individual files
+- Domain grouping: if clients.*, orders.*, quotations.* appear across layers
+  → the project is domain-oriented; list the domains, not the files
+
+If you cannot detect a pattern, omit that convention. Never invent one.
+
+### `project_structure.directories` — describe architecture, not a tree
+
+Write what each directory layer IS and DOES, not a directory listing.
+"src/api/ contains one HTTP client module per business entity" is good.
+A table of directory paths with file counts is useless to an agent.
+
+### `build_system.scripts` — exact commands only
+
+Copy them verbatim. Use fenced code blocks. Never paraphrase.
+
+## FORMAT (include only sections with real data)
 
 ### Project Overview
-Architecture summary from directory layout and detected languages/frameworks.
+2–4 sentences: what the system does, the tech stack, and the top-level
+architectural shape (e.g., layered, domain-driven, monorepo). No file lists.
+
+### Architecture & Data Flow
+The most important narrative section. Describe the architectural layers or
+domains detected from the directory structure and file analysis.
+For a layered architecture: name each layer, its responsibility, and the
+direction data flows (e.g., Page → Context → Service → API → Backend).
+For a domain architecture: name the domains and their boundaries.
+This section replaces any need to enumerate files.
+
+### Conventions & Patterns
+THE most actionable section for AI agents. Synthesize from full_analysis:
+- File naming rules per layer/type (exact pattern, exact directory)
+- Export contract per file type (what every file of that type must export)
+- Import rules (which layers may import from which — e.g., "pages import
+  only from Context, never directly from api/")
+- How to add a new entity end-to-end (step-by-step, referencing the detected
+  pattern — e.g., "1. Create <entity>.api.js in src/api/ with CRUD exports.
+  2. Create <entity>Service.js in src/services/. 3. Add hook in src/hooks/.
+  4. Register in DataContext.")
 
 ### Setup Commands
-Exact install commands from build_system. Use code blocks.
+Exact install and environment commands from build_system. Fenced code blocks.
 
 ### Development Workflow
-Run/build/watch commands from build_system.scripts only.
+Run/build/watch commands from build_system.scripts. Fenced code blocks.
+Skip if no scripts detected.
 
 ### Testing Instructions
-From test_directories + config_files_found (jest/pytest/vitest configs) +
-build_system.scripts test entries.
+From test_directories + config_files_found (jest/pytest/vitest) +
+build_system.scripts test entries. Skip entirely if nothing detected.
 
 ### Code Style
 Only if linting/formatting config files appear in config_files_found.
-Include exact commands. If nothing detected, omit this section entirely.
+Include the exact lint/format commands. Omit if nothing detected.
 
 ### Build and Deployment
-Build commands and CI info from ci_files_found. Omit if empty.
-
-### Pull Request Guidelines
-Only if CI files found. Omit otherwise.
+Build commands and CI pipeline info from ci_files_found. Omit if empty.
 
 ## QUALITY BAR
 
-- Every command must be exact and runnable — no placeholders.
-- Omit any section where you have zero real data from the payload.
-- Do not invent tools, commands, or conventions not evidenced in the payload.
+- Conventions section must be actionable: an agent reading it should know
+  exactly what file to create, where, and what to export — with zero guessing.
+- Every command must be exact and runnable. No placeholders like <your-value>.
+- Omit any section with zero real data from the payload.
+- Zero file enumeration tables or lists anywhere in the document.
 """.strip()
 
 

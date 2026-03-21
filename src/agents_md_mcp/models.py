@@ -80,5 +80,10 @@ class GenerateAgentsMdInput(BaseModel):
     )
     force_full_scan: bool = Field(
         default=False,
-        description="Force a full scan ignoring any existing cache.",
+        description=(
+            "Force a full scan ignoring any existing cache. "
+            "Use ONLY when the user explicitly asks to rescan or rebuild from scratch. "
+            "Do NOT set this to True when asked to improve, review, or update AGENTS.md — "
+            "the incremental scan already provides all the data needed."
+        ),
     )

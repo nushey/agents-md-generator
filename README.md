@@ -142,11 +142,14 @@ You can commit `.agents-config.json` to share exclusion rules and thresholds wit
 
 The `impact_threshold` controls which symbol changes are included in incremental scan payloads. Changes below the threshold are silently ignored — `AGENTS.md` is not regenerated for them.
 
-| Level | What qualifies |
-|-------|---------------|
-| `"high"` | HTTP endpoints (decorated routes), adding or removing a class / interface / struct, removing a public method |
-| `"medium"` | Adding a new public function, changing a public method's signature |
-| `"low"` | Any other public symbol change (e.g. adding a non-route method, minor signature tweaks) |
+| Change type | Symbol kind | Extra condition | Impact |
+|---|---|---|---|
+| any | any | Has HTTP decorator (`@HttpGet`, `@app.route`, `@Get`, …) | `high` |
+| `added` or `removed` | `class`, `interface`, `struct` | — | `high` |
+| `removed` | `method` | public | `high` |
+| `modified` | any | public | `medium` |
+| `added` | `function` or `method` | public | `medium` |
+| any | any | none of the above | `low` |
 
 **Choosing a threshold:**
 

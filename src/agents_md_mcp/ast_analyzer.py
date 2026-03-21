@@ -21,14 +21,14 @@ _ANALYZERS: dict[str, LanguageAnalyzer] = {}
 def _get_analyzer(language_key: str) -> LanguageAnalyzer | None:
     if language_key not in _ANALYZERS:
         try:
-            _ANALYZERS[language_key] = _build_analyzer(language_key)
+            _ANALYZERS[language_key] = build_analyzer(language_key)
         except Exception as exc:
             logger.warning("Cannot load analyzer for '%s': %s", language_key, exc)
             return None
     return _ANALYZERS[language_key]
 
 
-def _build_analyzer(language_key: str) -> LanguageAnalyzer:
+def build_analyzer(language_key: str) -> LanguageAnalyzer:
     if language_key == "python":
         return PythonAnalyzer()
     if language_key == "c_sharp":

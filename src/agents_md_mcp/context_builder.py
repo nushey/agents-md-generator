@@ -4,6 +4,7 @@ import fnmatch
 import json
 import logging
 import re
+import tomllib
 from pathlib import Path
 
 from .ast_analyzer import classify_impact, diff_analysis
@@ -109,6 +110,53 @@ def _detect_build_systems(root: Path) -> dict:
                 if pm not in detected:
                     detected.append(pm)
         except (json.JSONDecodeError, OSError):
+            pass
+
+    # Parse pyproject.toml — entry points, test runner, package manager
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            with open(pyproject, "rb") as f:
+                toml = tomllib.load(f)
+
+            py_scripts: dict[str, str] = {}
+
+            # Detect package manager from lock file presence
+            runner = "python"
+            if (root / "uv.lock").exists():
+                runner = "uv run"
+                if "uv" not in detected:
+                    detected.append("uv")
+            elif (root / "poetry.lock").exists():
+                runner = "poetry run"
+                if "poetry" not in detected:
+                    detected.append("poetry")
+
+            # Install command
+            if runner == "uv run":
+                py_scripts["install"] = "uv sync"
+            elif runner == "poetry run":
+                py_scripts["install"] = "poetry install"
+
+            # [project.scripts] → CLI entry points
+            project_scripts = toml.get("project", {}).get("scripts", {})
+            for name, target in project_scripts.items():
+                py_scripts[name] = f"{runner} {name}" if runner != "python" else name
+
+            # Detect test runner from dependencies
+            all_deps = (
+                toml.get("project", {}).get("dependencies", [])
+                + [d for deps in toml.get("project", {}).get("optional-dependencies", {}).values() for d in deps]
+            )
+            dep_names = [d.split(">=")[0].split("==")[0].split("[")[0].strip().lower() for d in all_deps]
+            if "pytest" in dep_names:
+                py_scripts["test"] = f"{runner} pytest"
+            elif "unittest" in dep_names:
+                py_scripts["test"] = f"{runner} python -m unittest"
+
+            if py_scripts:
+                scripts["python"] = py_scripts
+        except (OSError, tomllib.TOMLDecodeError):
             pass
 
     # Parse Makefile targets (first word of non-indented lines ending with :)
@@ -439,6 +487,10 @@ A table of directory paths with file counts is useless to an agent.
 ### `build_system.scripts` — exact commands only
 
 Copy them verbatim. Use fenced code blocks. Never paraphrase.
+`scripts.python` contains install, test, and CLI entry point commands derived
+from `pyproject.toml` and the detected package manager (uv, poetry, pip).
+`scripts.npm` contains scripts from `package.json`.
+`scripts.make` contains Makefile targets.
 
 ## FORMAT (include only sections with real data)
 

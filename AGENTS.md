@@ -2,128 +2,80 @@
 
 ## Project Overview
 
-MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and returns a structured payload for generating `AGENTS.md` files. Claude Code interprets the payload and writes or updates the file.
+`agents-md-generator` is a Python MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and produces structured `AGENTS.md` files for AI coding agents. It exposes a single MCP tool (`generate_agents_md`) that performs incremental or full scans, leverages a file-based cache to avoid redundant work, and returns a small JSON response with instructions for the calling agent to write the final document. The stack is pure Python with Pydantic for data models and FastMCP for the server transport.
 
-**Key technologies:**
-- Python 3.x with [FastMCP](https://github.com/jlowin/fastmcp) as the MCP server framework
-- [tree-sitter](https://tree-sitter.github.io/) for language-agnostic AST analysis
-- Pydantic v2 for data models
-- Incremental scanning via a local cache keyed to the current git commit
+## Architecture & Data Flow
 
-**Supported languages for analysis:** Python, TypeScript, JavaScript, Go, C#
-
-**Architecture:**
+The system is a layered pipeline triggered by a single MCP tool call:
 
 ```
-src/agents_md_mcp/
-├── server.py           # FastMCP entry point — exposes generate_agents_md tool
-├── config.py           # ProjectConfig: file extension → language mapping, load_config()
-├── change_detector.py  # detect_changes(): git-aware file diff, gitignore-aware
-├── ast_analyzer.py     # analyze_changes(), diff_analysis(), classify_impact()
-├── context_builder.py  # build_payload(): assembles final JSON payload for Claude
-├── cache.py            # Incremental scan cache (commit-keyed JSON)
-├── models.py           # Pydantic models: FileChange, SymbolInfo, FileAnalysis, CacheData…
-├── gitignore.py        # load_gitignore_spec(), is_gitignored()
-└── languages/
-    ├── base.py         # LanguageAnalyzer ABC
-    ├── python.py       # PythonAnalyzer
-    ├── typescript.py   # TypeScriptAnalyzer, JavaScriptAnalyzer
-    ├── go.py           # GoAnalyzer
-    └── csharp.py       # CSharpAnalyzer
+MCP Tool Call (server.py)
+  → Config + Gitignore loading (config.py, gitignore.py)
+  → Change detection against cache (change_detector.py, cache.py)
+  → Per-file AST analysis (ast_analyzer.py → languages/<lang>.py)
+  → Payload assembly (context_builder.py)
+  → Cache persistence (cache.py)
+  → JSON response returned to calling agent
 ```
 
----
+**MCP Layer** (`server.py`): Bootstraps the FastMCP server and registers `generate_agents_md` as the sole tool. Entry point for all external interaction.
+
+**Orchestration Layer** (`ast_analyzer.py`, `context_builder.py`): `ast_analyzer.py` coordinates which files need analysis, dispatches to the correct language analyzer, and computes symbol diffs. `context_builder.py` assembles the final payload dict from all collected analyses, change metadata, and project structure.
+
+**Infrastructure Layer** (`change_detector.py`, `cache.py`, `config.py`, `gitignore.py`): Handles git-based change detection, cache read/write/validation, project configuration, and gitignore filtering. These modules have no knowledge of AST or output format.
+
+**Analysis Layer** (`languages/`): Each supported language has a dedicated analyzer class implementing the `LanguageAnalyzer` ABC. Analyzers are stateless and receive a file path; they return a list of `SymbolInfo` objects.
+
+**Data Layer** (`models.py`): All Pydantic `BaseModel` definitions shared across every layer live here. No logic, only schema.
+
+## Conventions & Patterns
+
+### Adding a new language analyzer
+
+1. Create `src/agents_md_mcp/languages/<language>.py`.
+2. Define a class `<Language>Analyzer(LanguageAnalyzer)` implementing two methods:
+   - `language_key(self) -> str` — returns the canonical key (e.g. `"python"`, `"go"`).
+   - `analyze(self, file_path: Path) -> list[SymbolInfo]` — parses the file and returns extracted symbols.
+3. Register the new analyzer in `ast_analyzer.py`'s `build_analyzer()` factory function.
+4. Add fixture files under `tests/fixtures/sample.<ext>` and test coverage in `tests/test_ast_analyzer.py`.
+
+### Data models
+
+All Pydantic models live exclusively in `models.py`. Never define `BaseModel` subclasses in other modules. When a new data contract is needed (e.g. a new cache field), add it to `models.py` first.
+
+### Module responsibilities are strict
+
+Each module owns exactly one concern. Do not add file I/O to `models.py`, do not add AST logic to `cache.py`, and do not add payload formatting to `ast_analyzer.py`. The layered separation is intentional and must be preserved.
+
+### Cache location
+
+The cache is stored outside the project directory at `~/.cache/agents-md-generator/<project-hash>/`. Never write cache or payload files inside the project root.
 
 ## Setup Commands
 
 ```bash
-# Install the package with all dependencies
-pip install -e .
-
-# Or with uv (recommended)
+# Install dependencies (requires uv)
 uv sync
+
+# Run the MCP server directly
+uv run agents-md-generator
 ```
 
-Configuration is optional. To customize scanning behaviour, copy the example config:
-
-```bash
-cp .agents-config.example.json .agents-config.json
-```
-
----
+The server bootstrap is in `src/agents_md_mcp/server.py` (`main()` function).
 
 ## Development Workflow
 
-Run the MCP server directly:
-
 ```bash
-python run.py
+# Run the server
+uv run agents-md-generator
 ```
-
-Or via the installed entry point (defined in `pyproject.toml`):
-
-```bash
-agents-md-generator
-```
-
----
 
 ## Testing Instructions
 
-```bash
-# Run the full test suite
-pytest tests/
-
-# Run with verbose output
-pytest tests/ -v
-
-# Run a specific test file
-pytest tests/test_ast_analyzer.py -v
-pytest tests/test_change_detector.py -v
-pytest tests/test_context_builder.py -v
-pytest tests/test_cache.py -v
-pytest tests/test_config.py -v
-```
-
-Test fixtures (sample source files used by AST analyzer tests) live in `tests/fixtures/` and cover Python, TypeScript, Go, and C#.
-
----
-
-## Code Style
-
-Project uses `pyproject.toml` for tooling configuration. Run linting and formatting with:
+Tests live in `tests/` and use pytest. Fixture files for multi-language AST testing are in `tests/fixtures/` (`.cs`, `.go`, `.py`, `.ts`).
 
 ```bash
-# Format code
-ruff format src/ tests/
-
-# Lint
-ruff check src/ tests/
-
-# Type check
-mypy src/
+uv run pytest
 ```
 
----
-
-## MCP Tool Reference
-
-### `generate_agents_md`
-
-Analyzes a codebase and returns a JSON payload for AGENTS.md generation.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project_path` | `str` | `"."` | Path to the project root |
-| `force_full_scan` | `bool` | `false` | Ignore cache and force a full rescan |
-
-**Incremental scans:** On repeat invocations the tool loads a cache from `.agents-md-cache.json` at the project root and only re-analyzes files changed since the last commit. Pass `force_full_scan: true` to bypass this.
-
----
-
-## Key Conventions
-
-- **Models** are defined in `models.py` as Pydantic `BaseModel` subclasses. Add new data shapes there first.
-- **Language analyzers** must extend `LanguageAnalyzer` (ABC in `languages/base.py`) and implement `language_key` and `analyze`. Register them in `ast_analyzer.py`.
-- **`_is_excluded`** in `change_detector.py` is also imported by `context_builder.py` — keep its signature stable.
-- Cache is invalidated automatically when the git commit hash changes. Manual invalidation: delete `.agents-md-cache.json`.
+The test suite has 81 test functions covering: AST analysis, cache lifecycle, change detection, config loading, context/payload building, and gitignore filtering.

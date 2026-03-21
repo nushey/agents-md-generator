@@ -145,8 +145,8 @@ def classify_impact(symbol: SymbolInfo, change_type: str) -> str:
     if change_type == "modified" and symbol.visibility == "public":
         return "medium"
 
-    # MEDIUM: Adding a new public function
-    if change_type == "added" and symbol.kind == "function" and symbol.visibility == "public":
+    # MEDIUM: Adding a new public function or method
+    if change_type == "added" and symbol.kind in ("function", "method") and symbol.visibility == "public":
         return "medium"
 
     return "low"

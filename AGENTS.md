@@ -1,84 +1,94 @@
-# agents-md-generator
+# AGENTS.md — agents-md-generator
 
 ## Project Overview
 
-`agents-md-generator` is a Python MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and produces structured `AGENTS.md` files for AI coding agents. It exposes a single MCP tool (`generate_agents_md`) that performs incremental or full scans, leverages a file-based cache to avoid redundant work, and returns a structured JSON response with instructions for the calling agent to write the final document. The stack is pure Python with Pydantic for data models and FastMCP for the server transport.
+`agents-md-generator` is a Python MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and generates `AGENTS.md` files for AI coding agents. It supports Python, TypeScript, JavaScript, Go, and C#. The architecture is a sequential pipeline: change detection → AST analysis → payload assembly → MCP tool exposure, with an incremental caching layer to avoid full rescans on every call.
+
+---
 
 ## Architecture & Data Flow
 
-The system is a layered pipeline triggered by a single MCP tool call:
+### Module Inventory
+
+- `src/agents_md_mcp/` — Core package: MCP server, pipeline orchestration, caching, config, and payload assembly.
+- `src/agents_md_mcp/languages/` — Language-specific AST analyzers, one per supported language, all extending a shared abstract base.
+- `tests/` — Pytest test suite covering all pipeline modules.
+- `tests/fixtures/` — Sample source files in each supported language, used as AST parsing inputs in tests.
+- `docs/` — Project documentation.
+
+### Data Flow
 
 ```
-MCP Tool Call (server.py)
-  → Config + Gitignore loading (config.py, gitignore.py)
-  → Change detection against cache (change_detector.py, cache.py)
-  → Per-file AST analysis (ast_analyzer.py → languages/<lang>.py)
-  → Payload assembly (context_builder.py)
-  → Cache persistence (cache.py)
-  → JSON response returned to calling agent
+change_detector  →  ast_analyzer  →  context_builder  →  server (MCP tools)
+     ↑                   ↑
+   cache.py          languages/
+   config.py
 ```
 
-**MCP Layer** (`server.py`): Bootstraps the FastMCP server and registers `generate_agents_md` as the sole tool. It serves as the entry point for all external interaction.
+1. `change_detector.detect_changes` compares the current state against the cache to produce a list of `FileChange` objects.
+2. `ast_analyzer.analyze_changes` selects the appropriate `LanguageAnalyzer` via `build_analyzer` and extracts public symbols from changed files.
+3. `context_builder.build_payload` merges new analyses with cached data into a structured JSON payload.
+4. `server.py` exposes two MCP tools (`generate_agents_md`, `get_payload_chunk`) that orchestrate the pipeline and stream the payload back to the caller in chunks.
 
-**Orchestration Layer** (`ast_analyzer.py`, `context_builder.py`): `ast_analyzer.py` coordinates which files need analysis, dispatches to the correct language analyzer, and computes symbol diffs. `context_builder.py` assembles the final payload dictionary from collected analyses, change metadata, and project structure.
-
-**Infrastructure Layer** (`change_detector.py`, `cache.py`, `config.py`, `gitignore.py`): Handles git-based change detection, cache lifecycle (read/write/validation), project configuration, and gitignore filtering. These modules are agnostic of AST logic or output formatting.
-
-**Analysis Layer** (`languages/`): Each supported language (Python, C#, Go, TypeScript) has a dedicated analyzer class implementing the `LanguageAnalyzer` ABC. Analyzers are stateless and extract `SymbolInfo` from provided file paths.
-
-**Data Layer** (`models.py`): All Pydantic `BaseModel` definitions shared across layers live here. This module contains no logic, only schemas for data consistency.
+---
 
 ## Conventions & Patterns
 
-### Adding a new language analyzer
+### Adding a New Language Analyzer
+
+Each supported language has exactly one analyzer class in `src/agents_md_mcp/languages/<language>.py` following this contract:
 
 1. Create `src/agents_md_mcp/languages/<language>.py`.
-2. Define a class `<Language>Analyzer(LanguageAnalyzer)` implementing:
-   - `language_key(self) -> str` — returns the canonical key (e.g. `"python"`, `"go"`).
-   - `analyze(self, file_path: Path) -> list[SymbolInfo]` — parses the file and returns extracted symbols.
-3. Register the new analyzer in `ast_analyzer.py`'s `build_analyzer()` factory function.
-4. Add fixture files under `tests/fixtures/sample.<ext>` and test coverage in `tests/test_ast_analyzer.py`.
+2. Define a class `<Language>Analyzer(LanguageAnalyzer)` implementing `language_key` (returns the string key) and `analyze` (returns a `FileAnalysis`).
+3. Register it in `ast_analyzer.build_analyzer` so it can be resolved by language key.
 
-### Data models
+JavaScript reuses the TypeScript analyzer via inheritance (`JavaScriptAnalyzer(TypeScriptAnalyzer)`) — apply the same pattern for closely related languages.
 
-All Pydantic models live exclusively in `models.py`. Never define `BaseModel` subclasses in other modules. When a new data contract is needed (e.g., a new cache field or tool parameter), update `models.py` first.
+### Models
 
-### Module responsibilities are strict
+All data structures are Pydantic `BaseModel` subclasses defined in `src/agents_md_mcp/models.py`. Add new models there; do not define them inline in other modules.
 
-Each module owns exactly one concern. Do not add file I/O to `models.py`, do not add AST logic to `cache.py`, and do not add payload formatting to `ast_analyzer.py`. The layered separation is intentional and must be preserved.
+### MCP Tools
 
-### Cache location
+MCP tools live exclusively in `src/agents_md_mcp/server.py` and are registered with the `@mcp.tool` decorator. Tool input schemas are Pydantic models defined in `models.py`.
 
-The cache is stored outside the project directory at `~/.cache/agents-md-generator/<project-hash>/`. Never write cache or payload files inside the project root.
+### Chunk-Based Payload Transfer
+
+The payload is written to `.agents-payload.json` and read back in indexed chunks via `get_payload_chunk`. The file is deleted after the last chunk is consumed. This pattern avoids large MCP wire payloads — preserve it when adding new data to the payload.
+
+---
+
+## Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `PYPI_TOKEN` | PyPI API token used by `publish.sh` to publish the package. |
+
+---
 
 ## Setup Commands
 
 ```bash
-# Install dependencies (requires uv)
 uv sync
-
-# Run the MCP server directly
-uv run agents-md-generator
 ```
 
-The server bootstrap is located in `src/agents_md_mcp/server.py`.
-
-## Development Workflow
+The server bootstrap is `src/agents_md_mcp/server.py`. To run the MCP server:
 
 ```bash
-# Run the server for local testing
 uv run agents-md-generator
 ```
 
-## Testing Instructions
+---
 
-Tests live in `tests/` and use pytest. The suite includes fixture-based testing for multi-language AST analysis using sample files in `tests/fixtures/` (`.cs`, `.go`, `.py`, `.ts`).
+## Testing Instructions
 
 ```bash
 uv run pytest
 ```
 
-The comprehensive test suite covers: AST analysis for all supported languages, cache lifecycle, change detection (including symbol diffs and impact analysis), config loading, and context building.
+Tests live in `tests/` (81 test functions across 7 modules). Fixtures for AST parsing are in `tests/fixtures/` — one sample file per supported language.
+
+---
 
 ## Keeping AGENTS.md Up to Date
 

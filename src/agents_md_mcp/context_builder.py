@@ -558,11 +558,18 @@ TASK: {action} AGENTS.md file at the project root.
    their exports. If you find yourself writing "| clients.api.js | getClients, addClient |"
    — STOP. That is wrong. AGENTS.md is not a file index.
 
-4. DO NOT invent commands, tools, or conventions absent from this payload.
+4. DO NOT enumerate classes, interfaces, functions, or any code symbols by name.
+   Never produce a bullet list like "- AttractionService, IncidentService, TicketService".
+   Use symbol names ONLY to infer patterns and naming conventions, then document
+   the PATTERN — not the instances. The only exception: classes that are unique
+   and have no peers (e.g. Guard, ResultHandler, ServiceFactoryInjector) may be
+   named once when their role cannot be inferred from a convention.
+
+5. DO NOT invent commands, tools, or conventions absent from this payload.
    If a script is not in build_system.scripts, do not mention it.
    If a linter is not in config_files_found, do not claim it exists.
 
-5. USE ONLY the data in this payload:
+6. USE ONLY the data in this payload:
    - metadata → project name, detected languages
    - project_structure → directories, config files, CI files, test directories
    - build_system → detected tools, package files, parsed scripts
@@ -627,12 +634,24 @@ from `pyproject.toml` and the detected package manager (uv, poetry, pip).
 architectural shape (e.g., layered, domain-driven, monorepo). No file lists.
 
 ### Architecture & Data Flow
-The most important narrative section. Describe the architectural layers or
-domains detected from the directory structure and file analysis.
-For a layered architecture: name each layer, its responsibility, and the
-direction data flows (e.g., Page → Context → Service → API → Backend).
+The most important narrative section. It has two mandatory parts:
+
+**Part 1 — Module/project inventory (REQUIRED, no exceptions):**
+List EVERY top-level project, package, or module detected in
+project_structure.directories. For each, write exactly ONE sentence describing
+its sole responsibility. Nothing more. Use this format:
+  - `<module-name>` — <one-sentence purpose>
+Example:
+  - `TPark.Domain` — Pure domain models, enums, and validation with no external dependencies.
+  - `TPark.Services` — Business logic implementing all IServices interfaces.
+Every module must appear. Missing a module is a bug in this document.
+
+**Part 2 — Data flow narrative:**
+After the module list, describe the architectural shape and data direction.
+For a layered architecture: name each layer and the direction data flows
+(e.g., WebApi → Orchestrators → Services → IDataAccess → DataAccess).
 For a domain architecture: name the domains and their boundaries.
-This section replaces any need to enumerate files.
+This section replaces any need to enumerate files or classes.
 
 ### Conventions & Patterns
 THE most actionable section for AI agents. Synthesize from full_analysis:
@@ -693,6 +712,10 @@ To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
 - Every command must be exact and runnable. No placeholders like <your-value>.
 - Omit any section with zero real data from the payload.
 - Zero file enumeration tables or lists anywhere in the document.
+- Zero class/interface/function enumeration anywhere. No lists of symbol names.
+- Architecture section MUST list every detected module/project — no omissions.
+- Describe patterns, not instances: "one service per entity named <Entity>Service"
+  is correct; "AttractionService, IncidentService, TicketService" is wrong.
 """.strip()
 
 

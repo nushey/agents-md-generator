@@ -29,7 +29,7 @@ from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
 from .context_builder import _is_public, _is_test_file
-from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput
+from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput, GetPayloadChunkInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
 logging.basicConfig(
@@ -40,8 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PAYLOAD_FILENAME = "payload.json"
-# Lines per Read tool call (Claude's Read tool works well at 2000 lines/call)
-CHUNK_LINES = 2000
+CHUNK_LINES = 500
 
 mcp = FastMCP("agents_md_mcp")
 
@@ -183,53 +182,112 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
 
     agents_md_path = (project_path / config.agents_md_path.lstrip("./")).resolve()
 
-    # 8. Return small response with exact instructions for Claude Code
+    # 8. Return small response with instructions to call get_payload_chunk
     return json.dumps(
-        _build_response(payload_path, payload_lines, agents_md_path),
+        _build_response(payload_path, payload_lines, agents_md_path, project_path),
         indent=2,
     )
+
+
+@mcp.tool(
+    name="get_payload_chunk",
+    annotations={
+        "title": "Get Payload Chunk",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def get_payload_chunk(params: GetPayloadChunkInput) -> str:
+    """Retrieve a chunk of the analysis payload produced by generate_agents_md.
+
+    Call this tool repeatedly starting at chunk_index=0, incrementing by 1 each time,
+    until the response contains has_more=false. Concatenate all 'data' fields in order
+    to reconstruct the full payload JSON.
+
+    The payload file is automatically deleted after the last chunk is read.
+
+    Args:
+        params (GetPayloadChunkInput): Input parameters containing:
+            - project_path (str): Path to the project root (must match generate_agents_md call).
+            - chunk_index (int): Zero-based index of the chunk to retrieve.
+
+    Returns:
+        str: JSON with fields: chunk_index, total_chunks, has_more (bool), data (str).
+             On the last chunk (has_more=false), the payload file is deleted from disk.
+    """
+    project_path = Path(params.project_path).resolve()
+    payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
+
+    if not payload_path.exists():
+        return json.dumps({
+            "error": (
+                "Payload file not found. "
+                "Call generate_agents_md first to produce the analysis payload."
+            )
+        })
+
+    payload_text = payload_path.read_text(encoding="utf-8")
+    lines = payload_text.splitlines(keepends=True)
+    total_lines = len(lines)
+    total_chunks = (total_lines + CHUNK_LINES - 1) // CHUNK_LINES
+
+    if params.chunk_index < 0 or params.chunk_index >= total_chunks:
+        return json.dumps({
+            "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
+        })
+
+    start = params.chunk_index * CHUNK_LINES
+    end = min(start + CHUNK_LINES, total_lines)
+    chunk_data = "".join(lines[start:end])
+
+    has_more = params.chunk_index < total_chunks - 1
+
+    if not has_more:
+        try:
+            payload_path.unlink()
+            logger.info("Payload file deleted after last chunk: %s", payload_path)
+        except OSError as exc:
+            logger.warning("Could not delete payload file: %s", exc)
+
+    return json.dumps({
+        "chunk_index": params.chunk_index,
+        "total_chunks": total_chunks,
+        "has_more": has_more,
+        "data": chunk_data,
+    })
 
 
 def _build_response(
     payload_path: Path,
     payload_lines: int,
     agents_md_path: Path,
+    project_path: Path,
 ) -> dict:
-    """Build the small response that guides Claude Code through the task."""
+    """Build the small response that instructs the agent to use get_payload_chunk."""
 
-    needs_chunks = payload_lines > CHUNK_LINES
-    chunk_instructions = ""
-    if needs_chunks:
-        num_chunks = (payload_lines + CHUNK_LINES - 1) // CHUNK_LINES
-        chunk_instructions = (
-            f"The payload has {payload_lines} lines. Read it in {num_chunks} chunks "
-            f"of {CHUNK_LINES} lines each using the Read tool with offset and limit parameters "
-            f"(offset=0, offset={CHUNK_LINES}, offset={CHUNK_LINES*2}, etc.). "
-            "Accumulate all chunks before generating AGENTS.md. "
-        )
-    else:
-        chunk_instructions = (
-            f"The payload has {payload_lines} lines. Read it in a single Read tool call. "
-        )
+    num_chunks = (payload_lines + CHUNK_LINES - 1) // CHUNK_LINES
 
     return {
         "status": "ready",
-        "payload_file": str(payload_path),
         "payload_lines": payload_lines,
+        "total_chunks": num_chunks,
         "agents_md_path": str(agents_md_path),
         "instructions": (
             f"The codebase analysis is complete. Follow these steps EXACTLY — "
             f"do NOT deviate, ask questions, or read any other files:\n\n"
-            f"STEP 1 — Read the payload file at: {payload_path}\n"
-            f"{chunk_instructions}\n"
-            f"STEP 2 — The payload is a JSON object. Parse it and use ONLY the data "
-            f"inside it to generate AGENTS.md. The payload contains an 'instructions' "
+            f"STEP 1 — Retrieve the full payload by calling the get_payload_chunk tool "
+            f"repeatedly with project_path='{project_path}' and chunk_index starting at 0. "
+            f"Each response contains a 'has_more' field. Keep calling with the next "
+            f"chunk_index until has_more is false. Accumulate all 'data' fields in order.\n\n"
+            f"STEP 2 — Concatenate the accumulated data strings and parse the result as JSON. "
+            f"Use ONLY this data to generate AGENTS.md. The payload contains an 'instructions' "
             f"field with the exact format requirements.\n\n"
             f"STEP 3 — Write the generated AGENTS.md to: {agents_md_path}\n\n"
-            f"STEP 4 — Delete the temporary payload file: {payload_path}\n\n"
-            f"STEP 5 — Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
+            f"STEP 4 — Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
             f"IMPORTANT: Do not read any source files. Do not call generate_agents_md again. "
-            f"Do not ask the user for anything. Complete all 5 steps autonomously."
+            f"Do not ask the user for anything. Complete all 4 steps autonomously."
         ),
     }
 

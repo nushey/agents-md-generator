@@ -837,14 +837,16 @@ def build_payload(
             else:
                 full_analysis_payload.append(entry)
 
-    # Collapse test files into per-directory summaries
-    if test_analysis_payload:
-        full_analysis_payload.extend(_summarize_test_files(test_analysis_payload))
-
-    # Aggregate production dirs with repetitive patterns into directory summaries
+    # Aggregate production dirs FIRST (before test summaries are mixed in)
+    # _aggregate_by_directory expects entries with a "file" key; test_directory_summary
+    # entries only have "directory", so they must be added afterwards.
     full_analysis_payload = _aggregate_by_directory(
         full_analysis_payload, config.dir_aggregation_threshold
     )
+
+    # Collapse test files into per-directory summaries and append at the end
+    if test_analysis_payload:
+        full_analysis_payload.extend(_summarize_test_files(test_analysis_payload))
 
     env_vars = _detect_env_vars(root, config)
     entry_points = _detect_entry_points(root, config)

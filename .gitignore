@@ -11,6 +11,9 @@ build/
 .pytest_cache/
 .coverage
 
+# Secrets
+.env
+
 # Editor
 .idea/
 .vscode/

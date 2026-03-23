@@ -30,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "impact_threshold": "medium",
     "agents_md_path": "./AGENTS.md",
     "max_file_size_bytes": 1_048_576,  # 1MB
+    "dir_aggregation_threshold": 8,  # dirs with >= N files of same language are aggregated
 }
 
 # Extension → tree-sitter language key
@@ -55,6 +56,9 @@ class ProjectConfig:
         self.agents_md_path: str = raw.get("agents_md_path", DEFAULT_CONFIG["agents_md_path"])
         self.max_file_size_bytes: int = raw.get(
             "max_file_size_bytes", DEFAULT_CONFIG["max_file_size_bytes"]
+        )
+        self.dir_aggregation_threshold: int = raw.get(
+            "dir_aggregation_threshold", DEFAULT_CONFIG["dir_aggregation_threshold"]
         )
 
     def language_for_extension(self, ext: str) -> Optional[str]:

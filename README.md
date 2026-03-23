@@ -112,13 +112,26 @@ Sections with no detected data are omitted entirely.
 4. **No source changes?** The tool stops and asks whether you want to improve the existing `AGENTS.md` content anyway
 5. **Private symbols and test file internals** are excluded from both cache and payload — only the public API surface matters for `AGENTS.md`
 
+### How Large Payloads Are Streamed
+
+For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through a second tool: `get_payload_chunk`.
+
+**Flow:**
+
+1. `generate_agents_md` runs the full analysis, writes the payload to disk, and returns a small response with `total_chunks` and instructions
+2. The client calls `get_payload_chunk(project_path, chunk_index=0)`, then increments `chunk_index` until the response contains `has_more: false`
+3. The client concatenates all `data` fields in order and parses the result as JSON
+4. The payload file is automatically deleted after the last chunk is read
+
+This flow is pure MCP — no filesystem access required from the client side. Any MCP-compatible client can follow it.
+
 ### Cache and Payload Location
 
 All runtime artifacts are stored **outside your project**, in the user cache directory:
 
 ```
 ~/.cache/agents-md-generator/<project-hash>/cache.json    ← incremental scan cache
-~/.cache/agents-md-generator/<project-hash>/payload.json  ← temporary, deleted after each run
+~/.cache/agents-md-generator/<project-hash>/payload.json  ← temporary, deleted after last chunk read
 ```
 
 The `<project-hash>` is a SHA-256 of the project's absolute path — unique per project. Nothing is written to your repository.
@@ -147,7 +160,8 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
   "include": [],
   "languages": "auto",
   "agents_md_path": "./AGENTS.md",
-  "max_file_size_bytes": 1048576
+  "max_file_size_bytes": 1048576,
+  "dir_aggregation_threshold": 8
 }
 ```
 
@@ -161,6 +175,7 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 | `languages` | `"auto"` | `"auto"` detects all supported languages, or pass a list like `["typescript", "python"]` |
 | `agents_md_path` | `"./AGENTS.md"` | Output path for the generated file |
 | `max_file_size_bytes` | `1048576` | Files larger than this are skipped (default: 1 MB) |
+| `dir_aggregation_threshold` | `8` | Directories with this many or more files of the same language are collapsed into a single directory summary instead of per-file entries. Reduces payload size significantly on large codebases. Set to a high number to disable. |
 
 You can commit `.agents-config.json` to share exclusion rules and thresholds with your team.
 

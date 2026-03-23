@@ -2,7 +2,9 @@
 
 MCP server that analyzes codebases with [tree-sitter](https://tree-sitter.github.io/) and generates [`AGENTS.md`](https://agents.md/) files.
 
-**How it works:** The server does all the heavy lifting locally — AST parsing, incremental change detection, environment variable scanning, entry point detection. It writes a compact structured payload to disk and returns step-by-step instructions to Claude Code. Claude reads the payload and writes `AGENTS.md`. No large data travels over the MCP wire.
+Compatible with any MCP-capable client: Claude Code, Gemini CLI, Cursor, Windsurf, and others.
+
+**How it works:** The server does all the heavy lifting locally — AST parsing, incremental change detection, environment variable scanning, entry point detection. It writes a compact structured payload to disk and returns step-by-step instructions to your AI client. The client reads the payload and writes `AGENTS.md`. No large data travels over the MCP wire.
 
 ## Supported Languages
 
@@ -14,17 +16,15 @@ Python · C# · TypeScript · JavaScript · Go
 
 See [INSTALLATION.md](https://github.com/nushey/agents-md-generator/blob/main/INSTALLATION.md) for the full guide including prerequisites and troubleshooting.
 
-**Requirements:** Python 3.11+, [uv](https://github.com/astral-sh/uv), Git, Claude Code.
+**Requirements:** Python 3.11+, [uv](https://github.com/astral-sh/uv), Git, and any MCP-compatible client.
 
-### Claude Code configuration
-
-Run this command to install:
+### Claude Code
 
 ```bash
 claude mcp add agents-md uvx agents-md-generator
 ```
 
-Or add it manually to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
+Or add it manually to `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
 
 ```json
 {
@@ -37,17 +37,43 @@ Or add it manually to your `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.cla
 }
 ```
 
-Restart Claude Code — `uvx` downloads the package automatically on first run.
+### Gemini CLI
+
+Add it to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
+
+### Other MCP clients (Cursor, Windsurf, etc.)
+
+The server uses stdio transport. Add this entry to your client's MCP config under `mcpServers`:
+
+```json
+"agents-md": {
+  "command": "uvx",
+  "args": ["agents-md-generator"]
+}
+```
+
+Restart your client — `uvx` downloads the package automatically on first run.
 
 ---
 
 ## Usage
 
-Once registered, ask Claude Code:
+Once registered, ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
-Claude will call `generate_agents_md` automatically.
+The client will call `generate_agents_md` automatically.
 
 ### Tool Parameters
 

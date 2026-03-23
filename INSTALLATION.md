@@ -1,6 +1,6 @@
 # Installation Guide
 
-Step-by-step setup for Linux and Windows.
+Step-by-step setup for Linux, macOS, and Windows. Works with Claude Code, Gemini CLI, Cursor, Windsurf, and any other MCP-compatible client.
 
 ---
 
@@ -81,30 +81,15 @@ Download from [git-scm.com](https://git-scm.com/download/win) and run the instal
 
 ---
 
-### 4. Claude Code
+### 4. An MCP-compatible client
 
-Install [Claude Code](https://claude.ai/code) and verify it works before proceeding.
+Install at least one of the supported clients before proceeding.
 
 ---
 
-## Configure Claude Code
+## Configure your client
 
-Open your Claude Code config file and add the `agents-md` server to `mcpServers`.
-
-### Config file location
-
-| Platform | Path |
-|----------|------|
-| Linux / macOS | `~/.claude.json` |
-| Windows | `%USERPROFILE%\.claude.json` |
-
-### Quick install
-
-```bash
-claude mcp add agents-md uvx agents-md-generator
-```
-
-### Manual config
+Add `agents-md-generator` to your client's MCP server list. The config block is the same for all clients — only the file location differs.
 
 ```json
 {
@@ -117,23 +102,81 @@ claude mcp add agents-md uvx agents-md-generator
 }
 ```
 
-If `mcpServers` already exists in your config, add only the `"agents-md"` entry inside it.
+If `mcpServers` already exists in your config file, add only the `"agents-md"` entry inside it.
+
+---
+
+### Claude Code
+
+**Quick install (recommended)**
+
+```bash
+claude mcp add agents-md uvx agents-md-generator
+```
+
+**Manual config file location**
+
+| Platform | Path |
+|----------|------|
+| Linux / macOS | `~/.claude.json` |
+| Windows | `%USERPROFILE%\.claude.json` |
+
+Restart Claude Code after saving the config.
+
+---
+
+### Gemini CLI
+
+**Config file location**
+
+| Platform | Path |
+|----------|------|
+| Linux / macOS | `~/.gemini/settings.json` |
+| Windows | `%USERPROFILE%\.gemini\settings.json` |
+
+Create the file if it does not exist, then add the `mcpServers` block:
+
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
+
+Restart Gemini CLI after saving.
+
+---
+
+### Cursor
+
+Add the entry to `.cursor/mcp.json` in your project root (project-scoped) or to the global Cursor settings under **Settings → MCP**.
+
+---
+
+### Other clients (Windsurf, Continue, etc.)
+
+Any client that supports stdio MCP servers will work. Consult your client's documentation for the config file location and add the `"agents-md"` entry under `mcpServers`.
 
 ---
 
 ## Verify
 
-Restart Claude Code after saving the config. On first start, `uvx` will download the package and its dependencies automatically — this takes a few seconds only once.
+On first start, `uvx` downloads the package and its dependencies automatically — this takes a few seconds only once.
 
-Then open any project and ask:
+Open any project and ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
-Claude should call `generate_agents_md` automatically. If the tool does not appear:
+The client should call `generate_agents_md` automatically. If the tool does not appear:
 
 1. Verify the JSON is valid — no trailing commas, correct quotes
-2. Restart Claude Code completely
-3. Check the MCP panel in Claude Code for server errors
+2. Restart your client completely
+3. Check that `uvx --version` works in your terminal
+4. Check the MCP panel or logs in your client for server errors
 
 ---
 
@@ -161,11 +204,12 @@ Each project gets its own subdirectory identified by a hash of its absolute path
 
 uv is not installed or not on your PATH. Run the install command above and restart your terminal.
 
-### Tool does not appear in Claude Code
+### Tool does not appear in your client
 
-- Confirm the JSON in `.claude.json` is valid
-- Restart Claude Code completely after any config change
+- Confirm the JSON in your config file is valid — no trailing commas, correct quotes
+- Restart your client completely after any config change
 - Check that `uvx --version` works in your terminal
+- Check your client's MCP panel or logs for server errors
 
 ### Cache is stale after moving the project directory
 

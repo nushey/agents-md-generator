@@ -3,6 +3,8 @@
 import logging
 from pathlib import Path
 
+from .path_utils import normalize_path
+
 import pathspec
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ def load_gitignore_spec(project_path: str | Path) -> pathspec.PathSpec | None:
             gitignore.relative_to(root)
         except ValueError:
             continue
-        rel_dir = gitignore.parent.relative_to(root)
+        rel_dir = normalize_path(str(gitignore.parent.relative_to(root)))
 
         try:
             lines = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -41,7 +43,7 @@ def load_gitignore_spec(project_path: str | Path) -> pathspec.PathSpec | None:
             if not stripped or stripped.startswith("#"):
                 continue
             # Prefix patterns from subdirectory gitignores
-            if rel_dir != Path("."):
+            if rel_dir != ".":
                 pattern = f"{rel_dir}/{stripped}"
             else:
                 pattern = stripped

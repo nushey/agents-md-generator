@@ -10,6 +10,7 @@ from .cache import CacheData
 from .config import ProjectConfig
 from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileChange
+from .path_utils import normalize_path, rel_posix
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def _hash_file(path: Path) -> str:
 
 
 def _git_ls_files(project_path: Path) -> list[str] | None:
-    """Return list of git-tracked file paths (relative). None if not a git repo."""
+    """Return list of git-tracked file paths (relative, forward-slash). None if not a git repo."""
     try:
         result = subprocess.run(
             ["git", "ls-files"],
@@ -32,7 +33,7 @@ def _git_ls_files(project_path: Path) -> list[str] | None:
             timeout=30,
         )
         if result.returncode == 0:
-            return [p for p in result.stdout.splitlines() if p]
+            return [normalize_path(p) for p in result.stdout.splitlines() if p]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return None
@@ -44,7 +45,7 @@ def _fs_walk(project_path: Path, gitignore_spec=None) -> list[str]:
     for p in project_path.rglob("*"):
         if not p.is_file():
             continue
-        rel = str(p.relative_to(project_path))
+        rel = rel_posix(p, project_path)
         if gitignore_spec and is_gitignored(rel, gitignore_spec):
             continue
         files.append(rel)
@@ -61,9 +62,8 @@ def _is_excluded(path: str, config: ProjectConfig) -> bool:
     2. Inner-segment check — handles **/dirname/** patterns where the path
        doesn't start with /: extract the middle token and match any component
     """
-    # Normalize to forward slashes so patterns like **/app/lib/** work on Windows
-    normalized = path.replace("\\", "/")
-    path_parts = Path(path).parts
+    normalized = normalize_path(path)
+    path_parts = normalized.split("/")
     for pattern in config.exclude:
         # 1. Direct fnmatch (works for **/*.min.js, **/dist/**, etc.)
         if fnmatch.fnmatch(normalized, pattern):

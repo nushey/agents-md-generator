@@ -6,6 +6,7 @@ from pathlib import Path
 from .change_detector import _is_excluded
 from .config import EXTENSION_TO_LANGUAGE, ProjectConfig
 from .gitignore import is_gitignored, load_gitignore_spec
+from .path_utils import rel_posix
 from .symbol_utils import _is_test_file
 
 # ── Project structure ─────────────────────────────────────────────────────────
@@ -68,12 +69,12 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
         for item in root.rglob("*"):
             if not item.is_file():
                 continue
-            rel = str(item.relative_to(root))
+            rel = rel_posix(item, root)
             if is_gitignored(rel, gitignore_spec):
                 continue
             if _is_excluded(rel, config):
                 continue
-            parent_rel = str(item.parent.relative_to(root))
+            parent_rel = rel_posix(item.parent, root)
             if parent_rel == ".":
                 continue
             if parent_rel not in dir_summary:
@@ -104,27 +105,27 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     config_found = []
     for pattern in _CONFIG_FILES:
         matches = list(root.glob(pattern))
-        config_found.extend(str(m.relative_to(root)) for m in matches)
+        config_found.extend(rel_posix(m, root) for m in matches)
 
     # CI files
     ci_found = []
     for pattern in _CI_PATTERNS:
         matches = list(root.glob(pattern))
-        ci_found.extend(str(m.relative_to(root)) for m in matches)
+        ci_found.extend(rel_posix(m, root) for m in matches)
 
     # Test directories
     test_dirs = []
     for pattern in _TEST_DIR_PATTERNS:
         for d in root.glob(pattern):
             if d.is_dir():
-                test_dirs.append(str(d.relative_to(root)) + "/")
+                test_dirs.append(rel_posix(d, root) + "/")
         # Also *.Tests style (case insensitive check)
         for d in root.glob("*"):
             if d.is_dir() and any(
                 d.name.lower().endswith(suf)
                 for suf in (".tests", ".test", ".specs", ".spec")
             ):
-                rel = str(d.relative_to(root)) + "/"
+                rel = rel_posix(d, root) + "/"
                 if rel not in test_dirs:
                     test_dirs.append(rel)
 
@@ -162,7 +163,7 @@ def _detect_env_vars(root: Path, config: ProjectConfig) -> list[str]:
         for item in root.rglob("*"):
             if not item.is_file():
                 continue
-            rel = str(item.relative_to(root))
+            rel = rel_posix(item, root)
             if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
                 continue
             lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
@@ -238,7 +239,7 @@ def _detect_entry_points(root: Path, config: ProjectConfig) -> list[dict]:
         for item in root.rglob("*"):
             if not item.is_file():
                 continue
-            rel = str(item.relative_to(root))
+            rel = rel_posix(item, root)
             if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
                 continue
             if not config.is_extension_supported(item.suffix.lower()):
@@ -249,7 +250,7 @@ def _detect_entry_points(root: Path, config: ProjectConfig) -> list[dict]:
             if stem not in _ENTRY_STEMS:
                 continue
             # One entry per directory — avoid index.js + index.ts duplicates
-            parent = str(item.parent.relative_to(root))
+            parent = rel_posix(item.parent, root)
             dir_key = f"{parent}/{stem}"
             if dir_key in seen_dirs:
                 continue

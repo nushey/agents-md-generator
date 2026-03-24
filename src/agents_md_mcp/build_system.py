@@ -4,6 +4,8 @@ import json
 import tomllib
 from pathlib import Path
 
+from .path_utils import rel_posix
+
 _BUILD_MARKERS: dict[str, list[str]] = {
     "dotnet": ["*.sln", "*.csproj", "global.json", "Directory.Build.props"],
     "npm": ["package.json"],
@@ -27,7 +29,7 @@ def _detect_build_systems(root: Path) -> dict:
             if matches:
                 detected.append(system)
                 for m in matches:
-                    rel = str(m.relative_to(root))
+                    rel = rel_posix(m, root)
                     if rel not in package_files:
                         package_files.append(rel)
                 break  # one match per system is enough

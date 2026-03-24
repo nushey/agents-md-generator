@@ -215,3 +215,25 @@ def test_impact_modifying_public_method_is_medium() -> None:
 def test_impact_private_change_is_low() -> None:
     sym = SymbolInfo(name="_validate", kind="method", visibility="private", signature="...")
     assert classify_impact(sym, "modified") == "low"
+
+
+def test_impact_adding_public_method_is_medium() -> None:
+    # C# has no standalone functions — all public members are methods.
+    # Adding a public method must be classified as medium, not low.
+    sym = SymbolInfo(name="ProcessOrder", kind="method", visibility="public", signature="...")
+    assert classify_impact(sym, "added") == "medium"
+
+
+def test_impact_removing_public_method_is_high() -> None:
+    sym = SymbolInfo(name="ProcessOrder", kind="method", visibility="public", signature="...")
+    assert classify_impact(sym, "removed") == "high"
+
+
+def test_impact_adding_public_function_is_medium() -> None:
+    sym = SymbolInfo(name="calculate", kind="function", visibility="public", signature="...")
+    assert classify_impact(sym, "added") == "medium"
+
+
+def test_impact_adding_private_method_is_low() -> None:
+    sym = SymbolInfo(name="_helper", kind="method", visibility="private", signature="...")
+    assert classify_impact(sym, "added") == "low"

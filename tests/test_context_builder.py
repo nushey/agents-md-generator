@@ -8,7 +8,9 @@ import pytest
 from agents_md_mcp.cache import make_empty_cache
 from agents_md_mcp.config import load_config
 from agents_md_mcp.context_builder import (
+    _aggregate_by_directory,
     _detect_build_systems,
+    _extract_class_pattern,
     _passes_threshold,
     _scan_project_structure,
     build_payload,
@@ -192,3 +194,113 @@ def test_build_payload_deleted_file(tmp_path: Path) -> None:
     assert len(payload["changes"]) == 1
     assert payload["changes"][0]["status"] == "deleted"
     assert payload["changes"][0]["impact"] == "high"
+
+
+# ── _aggregate_by_directory ────────────────────────────────────────────────────
+
+def _file_entry(file: str, lang: str, symbols: list[dict] | None = None) -> dict:
+    return {"file": file, "language": lang, "symbols": symbols or []}
+
+
+def _sym_dict(name: str, kind: str = "function") -> dict:
+    return {"name": name, "kind": kind, "visibility": "public"}
+
+
+def test_aggregate_below_threshold_keeps_individual() -> None:
+    entries = [
+        _file_entry("src/a.py", "python"),
+        _file_entry("src/b.py", "python"),
+    ]
+    result = _aggregate_by_directory(entries, threshold=8)
+    # Below threshold — must remain as individual file entries
+    assert len(result) == 2
+    assert all(e.get("kind") != "directory_summary" for e in result)
+
+
+def test_aggregate_above_threshold_produces_summary() -> None:
+    shared_syms = [_sym_dict("get"), _sym_dict("save"), _sym_dict("delete")]
+    entries = [
+        _file_entry(f"src/repo{i}.py", "python", shared_syms)
+        for i in range(8)
+    ]
+    result = _aggregate_by_directory(entries, threshold=8)
+    assert len(result) == 1
+    summary = result[0]
+    assert summary["kind"] == "directory_summary"
+    assert summary["file_count"] == 8
+    assert summary["language"] == "python"
+    assert "get" in summary["common_methods"]
+
+
+def test_aggregate_weak_pattern_keeps_individual() -> None:
+    # Each file has completely different symbols — no common methods
+    entries = [
+        _file_entry(f"src/f{i}.py", "python", [_sym_dict(f"unique_{i}")])
+        for i in range(8)
+    ]
+    result = _aggregate_by_directory(entries, threshold=8)
+    assert all(e.get("kind") != "directory_summary" for e in result)
+
+
+def test_aggregate_minority_language_kept_individual() -> None:
+    shared_syms = [_sym_dict("get"), _sym_dict("save"), _sym_dict("delete")]
+    py_entries = [_file_entry(f"src/repo{i}.py", "python", shared_syms) for i in range(8)]
+    ts_entry = _file_entry("src/utils.ts", "typescript", [_sym_dict("helper")])
+    result = _aggregate_by_directory(py_entries + [ts_entry], threshold=8)
+
+    kinds = [e.get("kind") for e in result]
+    assert "directory_summary" in kinds
+    # The TypeScript file must remain as an individual entry
+    ts_result = [e for e in result if e.get("file") == "src/utils.ts"]
+    assert len(ts_result) == 1
+
+
+def test_aggregate_different_dirs_are_independent() -> None:
+    shared_syms = [_sym_dict("get"), _sym_dict("save"), _sym_dict("delete")]
+    entries = (
+        [_file_entry(f"services/s{i}.py", "python", shared_syms) for i in range(8)]
+        + [_file_entry(f"models/m{i}.py", "python", shared_syms) for i in range(8)]
+    )
+    result = _aggregate_by_directory(entries, threshold=8)
+    summaries = [e for e in result if e.get("kind") == "directory_summary"]
+    assert len(summaries) == 2
+    dirs = {s["directory"] for s in summaries}
+    assert any("services" in d for d in dirs)
+    assert any("models" in d for d in dirs)
+
+
+# ── _extract_class_pattern ────────────────────────────────────────────────────
+
+def test_extract_class_pattern_common_suffix() -> None:
+    entries = [
+        _file_entry("a.py", "python", [_sym_dict("OrderService", "class")]),
+        _file_entry("b.py", "python", [_sym_dict("UserService", "class")]),
+        _file_entry("c.py", "python", [_sym_dict("PaymentService", "class")]),
+    ]
+    pattern = _extract_class_pattern(entries)
+    assert pattern == "*Service"
+
+
+def test_extract_class_pattern_common_prefix() -> None:
+    entries = [
+        _file_entry("a.py", "python", [_sym_dict("AbstractOrder", "class")]),
+        _file_entry("b.py", "python", [_sym_dict("AbstractUser", "class")]),
+        _file_entry("c.py", "python", [_sym_dict("AbstractPayment", "class")]),
+    ]
+    pattern = _extract_class_pattern(entries)
+    assert pattern == "Abstract*"
+
+
+def test_extract_class_pattern_no_pattern() -> None:
+    entries = [
+        _file_entry("a.py", "python", [_sym_dict("Foo", "class")]),
+        _file_entry("b.py", "python", [_sym_dict("Bar", "class")]),
+    ]
+    pattern = _extract_class_pattern(entries)
+    assert pattern is None
+
+
+def test_extract_class_pattern_too_few_classes() -> None:
+    entries = [_file_entry("a.py", "python", [_sym_dict("OnlyOne", "class")])]
+    pattern = _extract_class_pattern(entries)
+    assert pattern is None

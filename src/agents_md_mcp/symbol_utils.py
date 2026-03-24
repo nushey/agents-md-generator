@@ -124,7 +124,7 @@ def _summarize_test_files(entries: list[dict]) -> list[dict]:
     """Replace individual test file entries with one summary per directory."""
     by_dir: dict[str, list[dict]] = {}
     for e in entries:
-        d = str(Path(e["file"]).parent)
+        d = Path(e["file"]).parent.as_posix()
         by_dir.setdefault(d, []).append(e)
 
     summaries = []

@@ -78,7 +78,7 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
     # Group by parent directory
     by_dir: dict[str, list[dict]] = {}
     for entry in entries:
-        parent = str(Path(entry["file"]).parent)
+        parent = Path(entry["file"]).parent.as_posix()
         by_dir.setdefault(parent, []).append(entry)
 
     result: list[dict] = []

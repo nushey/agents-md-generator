@@ -55,11 +55,34 @@ def _slim_symbol(sym) -> dict:
     return out
 
 
+_MINIFIED_SHORT_NAME_THRESHOLD = 0.30  # >30% single/double-char names → minified
+
+
+def _is_minified(analysis: FileAnalysis) -> bool:
+    """Return True if the file looks like minified or bundled JS/TS.
+
+    Heuristic: if more than 30% of top-level public symbol names are
+    1–2 characters long, the file was likely minified or auto-generated.
+    Only applied to JS/TS files where this pattern is meaningful.
+    """
+    if analysis.language not in ("javascript", "typescript"):
+        return False
+    public_syms = [s for s in analysis.symbols if _is_public(s) and s.parent is None]
+    if len(public_syms) < 5:
+        return False
+    short = sum(1 for s in public_syms if len(s.name) <= 2)
+    return (short / len(public_syms)) > _MINIFIED_SHORT_NAME_THRESHOLD
+
+
 def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
     """Format a file for full_analysis — public symbols only.
 
-    Returns None if the file has no public symbols worth including.
+    Returns None if the file has no public symbols worth including,
+    or if the file is detected as minified/bundled.
     """
+    if _is_minified(analysis):
+        return None
+
     symbols_out = []
     for sym in analysis.symbols:
         if not _is_public(sym):

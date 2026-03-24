@@ -57,13 +57,16 @@ def _is_excluded(path: str, config: ProjectConfig) -> bool:
     Strategy:
     1. Direct fnmatch on the full path — handles **/*.ext patterns
        (fnmatch treats * as matching /, so ** works as a greedy wildcard)
+       Path is normalized to forward slashes so patterns work on Windows too.
     2. Inner-segment check — handles **/dirname/** patterns where the path
        doesn't start with /: extract the middle token and match any component
     """
+    # Normalize to forward slashes so patterns like **/app/lib/** work on Windows
+    normalized = path.replace("\\", "/")
     path_parts = Path(path).parts
     for pattern in config.exclude:
         # 1. Direct fnmatch (works for **/*.min.js, **/dist/**, etc.)
-        if fnmatch.fnmatch(path, pattern):
+        if fnmatch.fnmatch(normalized, pattern):
             return True
         # 2. Extract inner token between leading **/ and trailing /**
         #    e.g. "**/.venv/**" → ".venv", "**/node_modules/**" → "node_modules"

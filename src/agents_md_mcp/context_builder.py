@@ -126,6 +126,8 @@ def build_payload(
             else:
                 # No old analysis → treat as new
                 entry = _format_full(change.path, "modified", analysis)
+                if entry is None:
+                    continue
                 if _is_test_file(change.path):
                     test_analysis_payload.append(entry)
                 else:
@@ -133,6 +135,8 @@ def build_payload(
 
         elif change.status == "new":
             entry = _format_full(change.path, "new", analysis)
+            if entry is None:
+                continue
             if _is_test_file(change.path):
                 test_analysis_payload.append(entry)
             else:

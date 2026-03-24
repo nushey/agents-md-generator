@@ -44,39 +44,51 @@ def _is_test_file(path: str) -> bool:
 
 def _slim_symbol(sym) -> dict:
     """Return only the fields the AI needs — no line numbers, no parent."""
-    return {
+    out = {
         "name": sym.name,
         "kind": sym.kind,
         "visibility": sym.visibility,
         "signature": sym.signature,
-        "decorators": sym.decorators,
     }
+    if sym.decorators:
+        out["decorators"] = sym.decorators
+    return out
 
 
-def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict:
-    """Format a file for full_analysis — public symbols only."""
+def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
+    """Format a file for full_analysis — public symbols only.
+
+    Returns None if the file has no public symbols worth including.
+    """
     symbols_out = []
     for sym in analysis.symbols:
         if not _is_public(sym):
             continue
         if sym.kind == "class":
-            symbols_out.append({
+            entry: dict = {
                 "name": sym.name,
                 "kind": sym.kind,
                 "signature": sym.signature,
-                "decorators": sym.decorators,
                 "methods": [
                     s.name for s in analysis.symbols
                     if s.parent == sym.name and s.kind == "method" and _is_public(s)
                 ],
-            })
+            }
+            if sym.decorators:
+                entry["decorators"] = sym.decorators
+            symbols_out.append(entry)
         elif sym.parent is None:
-            symbols_out.append({
+            entry = {
                 "name": sym.name,
                 "kind": sym.kind,
                 "signature": sym.signature,
-                "decorators": sym.decorators,
-            })
+            }
+            if sym.decorators:
+                entry["decorators"] = sym.decorators
+            symbols_out.append(entry)
+
+    if not symbols_out:
+        return None
 
     return {
         "file": path,

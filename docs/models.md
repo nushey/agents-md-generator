@@ -15,7 +15,8 @@ Todos los modelos heredan de `BaseModel`. Pydantic valida automáticamente los t
 ### Jerarquía de modelos
 
 ```
-GenerateAgentsMdInput        ← entrada del tool MCP
+GenerateAgentsMdInput        ← entrada de generate_agents_md
+GetPayloadChunkInput         ← entrada de get_payload_chunk
     │
     ▼
 FileChange                   ← qué archivos cambiaron y cómo
@@ -45,9 +46,9 @@ Tiene tres campos clave:
 - `base_commit` — el SHA del commit de git cuando se hizo el último scan (usado para validar que la cache es coherente con el repo)
 - `files` — mapa de `path → CachedFile`
 
-### GenerateAgentsMdInput
+### GenerateAgentsMdInput y GetPayloadChunkInput
 
-El único modelo que llega del exterior (desde Claude Code via MCP). Tiene `project_path` y `force_full_scan`. El docstring del campo `force_full_scan` está escrito en segunda persona dirigido a Claude — es una instrucción para el modelo que lo llama, no para el desarrollador.
+Los dos modelos que llegan del exterior (desde el cliente MCP). `GenerateAgentsMdInput` tiene `project_path` y `force_full_scan`. `GetPayloadChunkInput` tiene `project_path` y `chunk_index`. Los docstrings de los campos están escritos en segunda persona dirigidos al modelo que los llama — son instrucciones para el cliente MCP, no para el desarrollador.
 
 ## Modelos
 
@@ -60,4 +61,5 @@ El único modelo que llega del exterior (desde Claude Code via MCP). Tiene `proj
 | `CachedSymbol` | Versión reducida de SymbolInfo para persistir en cache |
 | `CachedFile` | Entrada de cache para un archivo: hash + symbols cacheados |
 | `CacheData` | Raíz del archivo de cache: versión, commit, mapa de archivos |
-| `GenerateAgentsMdInput` | Input del tool MCP: project_path y force_full_scan |
+| `GenerateAgentsMdInput` | Input de generate_agents_md: project_path y force_full_scan |
+| `GetPayloadChunkInput` | Input de get_payload_chunk: project_path y chunk_index |

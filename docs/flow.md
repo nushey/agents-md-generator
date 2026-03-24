@@ -1,13 +1,13 @@
 # Flujo completo de ejecución
 
-Este documento describe qué pasa desde que Claude Code invoca `generate_agents_md` hasta que AGENTS.md queda escrito en el disco.
+Este documento describe qué pasa desde que el cliente MCP invoca `generate_agents_md` hasta que AGENTS.md queda escrito en el disco.
 
 ---
 
 ## Visión general
 
 ```
-Claude Code
+Cliente MCP
     │
     │  MCP call: generate_agents_md({ project_path, force_full_scan })
     ▼
@@ -16,26 +16,26 @@ server.py → generate_agents_md()
     ▼
 server.py → _run_pipeline()
     │
-    ├─ 1. config.py      → load_config()
-    ├─ 2. cache.py       → load_cache() + is_cache_valid()
+    ├─ 1. config.py          → load_config()
+    ├─ 2. cache.py           → load_cache() + is_cache_valid()
     ├─ 3. change_detector.py → detect_changes()
-    ├─ 4. ast_analyzer.py   → analyze_changes()
+    ├─ 4. ast_analyzer.py    → analyze_changes()
     ├─ 5. context_builder.py → build_payload()
-    ├─ 6. cache.py       → save_cache()
-    └─ 7. disk           → payload.json
+    ├─ 6. cache.py           → save_cache()
+    └─ 7. disco              → payload.json
     │
     ▼
 server.py → _build_response()
     │
-    │  MCP response: JSON pequeño (~1k) con instrucciones + path al payload
+    │  MCP response: JSON pequeño (~1k) con total_chunks e instrucciones
     ▼
-Claude Code
+Cliente MCP
     │
-    ├─ STEP 1: Read payload.json (en chunks si es largo)
-    ├─ STEP 2: Parsear JSON y usar SOLO esos datos
-    ├─ STEP 3: Write AGENTS.md
-    ├─ STEP 4: Delete payload.json
-    └─ STEP 5: Informar al usuario
+    ├─ STEP 1: Llamar get_payload_chunk(chunk_index=0), luego 1, 2… hasta has_more=false
+    ├─ STEP 2: Concatenar todos los campos "data" y parsear como JSON
+    ├─ STEP 3: Escribir AGENTS.md usando solo esos datos
+    └─ STEP 4: Informar al usuario
+         (payload.json se borra automáticamente al leer el último chunk)
 ```
 
 ---
@@ -49,6 +49,7 @@ El resultado es un `ProjectConfig` con:
 - Threshold de impacto (`low`, `medium`, `high`)
 - Lenguajes habilitados
 - Tamaño máximo de archivo
+- Threshold de agregación de directorios
 
 ---
 
@@ -108,19 +109,16 @@ El resultado es `{ path → FileAnalysis }` con todos los símbolos públicos + 
 
 ## Paso 5 — Construcción del payload
 
-`build_payload(...)` ensambla el JSON final. Es el paso más extenso.
+`build_payload(...)` en `context_builder.py` orquesta los scanners y ensambla el JSON final.
 
-### Análisis del filesystem (independiente del AST)
+### Scanners del filesystem (independientes del AST)
 
-Mientras se ensambla el payload, se hacen tres análisis adicionales del filesystem que no requieren AST:
+Cuatro módulos especializados hacen análisis estático del filesystem en paralelo conceptual:
 
-**`_scan_project_structure`**: lista directorios, cuenta archivos, detecta el lenguaje dominante por directorio. También detecta config files (`.eslintrc`, `tsconfig.json`, etc.) y archivos de CI (`.github/workflows/*.yml`, etc.).
-
-**`_detect_build_systems`**: busca `package.json`, `pyproject.toml`, `go.mod`, `Makefile`, etc. Para cada uno extrae los scripts ejecutables.
-
-**`_detect_env_vars`**: escanea código fuente con regex por lenguaje y archivos `.env.example`.
-
-**`_detect_entry_points`**: busca archivos cuyo stem es `main`, `index`, `app`, `server`, etc., e infiere su rol.
+- **`project_scanner._scan_project_structure`**: lista directorios, cuenta archivos, detecta el lenguaje dominante por directorio. También detecta config files (`.eslintrc`, `tsconfig.json`, etc.) y archivos de CI.
+- **`build_system._detect_build_systems`**: busca `package.json`, `pyproject.toml`, `go.mod`, `Makefile`, etc. Para cada uno extrae los scripts ejecutables.
+- **`project_scanner._detect_env_vars`**: escanea código fuente con regex por lenguaje y archivos `.env.example`.
+- **`project_scanner._detect_entry_points`**: busca archivos cuyo stem es `main`, `index`, `app`, `server`, etc., e infiere su rol.
 
 ### Procesamiento por archivo
 
@@ -128,10 +126,14 @@ Para cada `FileChange`:
 
 - **`"deleted"`**: se agrega al `changes_payload` con `impact="high"`
 - **`"new"`**: se formatea con todos sus símbolos públicos en `full_analysis_payload`
-- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica cada cambio, se filtra por threshold. Si nada supera el threshold → el archivo se omite del payload
+- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica cada cambio con `classify_impact`, se filtra por threshold. Si nada supera el threshold → el archivo se omite del payload
 - **`"modified"` sin historial**: se trata como `"new"`
 
-Los archivos de test se colapsan en resúmenes por directorio.
+### Agregación de directorios
+
+Los archivos de producción pasan por `aggregator._aggregate_by_directory`. Directorios con ≥ N archivos del mismo lenguaje que comparten métodos comunes se colapsan en un único `directory_summary` con `common_methods`, `class_pattern` y `sample_files`. Esto reduce drásticamente el tamaño del payload en proyectos grandes.
+
+Los archivos de test se colapsan por separado en `test_directory_summary` vía `symbol_utils._summarize_test_files`.
 
 ### El payload final
 
@@ -149,7 +151,7 @@ Los archivos de test se colapsan en resúmenes por directorio.
 }
 ```
 
-El campo `instructions` es el prompt que guía a Claude en cómo usar cada campo y qué escribir en cada sección de AGENTS.md.
+El campo `instructions` (generado por `instructions._build_instructions`) es el prompt que guía al cliente en cómo usar cada campo y qué escribir en cada sección de AGENTS.md.
 
 ---
 
@@ -167,29 +169,48 @@ Se construye una nueva cache desde cero:
 
 ## Paso 7 — Escritura del payload y respuesta
 
-El payload JSON se escribe en `~/.cache/agents-md-generator/<hash>/payload.json`.
+El payload JSON se escribe en `~/.cache/agents-md-generator/<project-hash>/payload.json`.
 
-Se calcula cuántas líneas tiene. Si supera 2000 líneas, se incluyen instrucciones de chunking en la respuesta. Si no, se lee de una sola vez.
-
-La respuesta que llega a Claude Code es un JSON pequeño:
+Se calcula cuántas líneas tiene y cuántos chunks de 500 líneas eso representa. La respuesta que llega al cliente MCP es un JSON pequeño:
 
 ```json
 {
   "status": "ready",
-  "payload_file": "/home/user/.cache/agents-md-generator/abc123/payload.json",
   "payload_lines": 847,
+  "total_chunks": 2,
   "agents_md_path": "/code/mi-proyecto/AGENTS.md",
-  "instructions": "STEP 1 — Read the payload file at: ..."
+  "instructions": "STEP 1 — Retrieve the full payload by calling get_payload_chunk..."
 }
 ```
 
 ---
 
+## Paso 8 — Streaming del payload (get_payload_chunk)
+
+El cliente llama `get_payload_chunk` repetidamente con `chunk_index` empezando en 0. Cada respuesta incluye:
+
+```json
+{
+  "chunk_index": 0,
+  "total_chunks": 2,
+  "has_more": true,
+  "data": "...500 líneas del payload..."
+}
+```
+
+Al leer el último chunk (`has_more: false`), el archivo `payload.json` se borra automáticamente del disco. El cliente concatena todos los campos `data` en orden y parsea el resultado como JSON.
+
+---
+
 ## Por qué este diseño y no otro
 
-### ¿Por qué no enviar el payload inline en la respuesta MCP?
+### ¿Por qué get_payload_chunk en vez de leer el archivo directamente?
 
-El payload puede tener miles de líneas para proyectos grandes. Si se enviara inline, todo ese contenido viaja en el contexto de un solo tool call — costoso en tokens, y puede superar límites de tamaño de respuesta. Al escribirlo a disco y que Claude lo lea con `Read`, el consumo de contexto se distribuye en múltiples llamadas y Claude puede procesar en chunks.
+La alternativa anterior era instruir al cliente a leer `payload.json` con su tool `Read`. Eso requería que el cliente tuviera acceso al filesystem y conociera la ruta exacta del cache. Con `get_payload_chunk`, el flujo es 100% MCP — cualquier cliente compatible (Claude Code, Cursor, Gemini CLI, Windsurf) puede seguirlo sin necesidad de acceso al filesystem. El server gestiona completamente el ciclo de vida del archivo.
+
+### ¿Por qué 500 líneas por chunk?
+
+Es un balance entre número de llamadas MCP y tamaño de cada respuesta. Chunks más grandes reducen las llamadas pero aumentan el riesgo de superar límites de respuesta. Chunks más chicos generan demasiado overhead de llamadas en proyectos grandes.
 
 ### ¿Por qué cache basada en SHA-256 y no en mtime?
 
@@ -199,6 +220,6 @@ El payload puede tener miles de líneas para proyectos grandes. Si se enviara in
 
 Un `git diff` de un archivo refactorizado puede tener 200 líneas modificadas aunque la API pública no cambió. El diff semántico sobre los símbolos detecta exactamente lo que le importa a AGENTS.md: qué cambió en la superficie pública. Esto también permite el filtrado por `impact_threshold`.
 
-### ¿Por qué las instrucciones para Claude van embebidas en el payload?
+### ¿Por qué las instrucciones para el cliente van embebidas en el payload?
 
-Para garantizar consistencia. Si las instrucciones estuvieran hardcodeadas en el prompt del usuario o en el system prompt de Claude Code, podrían variar entre versiones, contextos, o configuraciones. Al estar en el payload que genera el server, el mismo código controla tanto el dato como cómo debe usarlo Claude.
+Para garantizar consistencia. Si las instrucciones estuvieran hardcodeadas en el prompt del usuario o en el system prompt del cliente, podrían variar entre versiones, contextos, o configuraciones. Al estar en el payload que genera el server, el mismo código controla tanto el dato como cómo debe usarlo el modelo.

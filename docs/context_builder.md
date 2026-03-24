@@ -2,17 +2,44 @@
 
 ## Rol
 
-Es el módulo más complejo del sistema. Toma todos los resultados del análisis y los ensambla en el JSON payload que Claude Code va a leer para generar AGENTS.md. También detecta build systems, variables de entorno, entry points, y estructura del proyecto mediante análisis estático del filesystem — sin AST.
+Es el orquestador del ensamblado del payload. No contiene lógica propia — su única responsabilidad es invocar los módulos especializados en el orden correcto y armar el dict JSON final que el servidor escribe a disco.
 
-## Conceptos clave
+## Por qué existe como módulo separado
 
-### build_payload — el ensamblador central
+Antes de la refactorización, este archivo concentraba seis responsabilidades distintas. Al separar cada una en su propio módulo, `context_builder.py` quedó como el único punto que conoce el orden de ejecución y la estructura del payload — una sola razón para cambiar: si cambia el contrato del JSON.
 
-Recibe todo lo que saben los otros módulos y produce un único dict JSON con esta estructura:
+## Lo que orquesta
+
+```
+build_payload()
+    │
+    ├─ project_scanner._scan_project_structure()   → project_structure
+    ├─ build_system._detect_build_systems()         → build_system
+    ├─ project_scanner._detect_env_vars()           → env_vars
+    ├─ project_scanner._detect_entry_points()       → entry_points
+    │
+    ├─ [por cada FileChange]
+    │   ├─ symbol_utils._is_test_file()
+    │   ├─ symbol_utils._is_public()
+    │   ├─ ast_analyzer.diff_analysis()             → diff semántico
+    │   ├─ ast_analyzer.classify_impact()           → clasificación
+    │   ├─ symbol_utils._passes_threshold()         → filtrado
+    │   ├─ symbol_utils._slim_symbol()              → serialización
+    │   └─ symbol_utils._format_full()              → entrada full_analysis
+    │
+    ├─ aggregator._aggregate_by_directory()         → colapso de dirs
+    ├─ symbol_utils._summarize_test_files()         → colapso de tests
+    └─ instructions._build_instructions()           → prompt embebido
+```
+
+## Estructura del payload resultante
 
 ```json
 {
-  "metadata": { "project_name": "...", "languages_detected": [...] },
+  "metadata": {
+    "project_name": "...",
+    "languages_detected": [...]
+  },
   "project_structure": { "directories": {...}, "config_files_found": [...], ... },
   "build_system": { "detected": [...], "scripts": {...} },
   "entry_points": [{ "file": "...", "role": "..." }],
@@ -24,82 +51,24 @@ Recibe todo lo que saben los otros módulos y produce un único dict JSON con es
 }
 ```
 
-Cada campo de este JSON tiene una instrucción correspondiente en el campo `instructions` que le dice a Claude cómo usarlo.
+## Procesamiento por archivo (lógica de negocio central)
 
-### Detección de build systems sin AST
+Para cada `FileChange` en la lista de cambios:
 
-`_detect_build_systems` busca archivos marcadores en el filesystem:
-- `*.sln` → dotnet
-- `package.json` → npm
-- `go.mod` → go
-- `pyproject.toml` → python/uv/poetry
-- `Cargo.toml` → rust
-- etc.
+- **`"deleted"`**: se agrega a `changes` con `impact="high"`. Las eliminaciones son siempre notables.
+- **`"new"`**: se formatea con `_format_full`. Va a `full_analysis` (producción) o `test_analysis` según `_is_test_file`.
+- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica con `classify_impact`, se filtra por `impact_threshold`. Si ningún cambio supera el threshold → el archivo se omite completamente del payload.
+- **`"modified"` sin historial en cache**: se trata como `"new"`.
 
-Luego extrae los scripts ejecutables de cada uno:
-- **npm**: lee `package.json["scripts"]`
-- **Python/uv**: lee `pyproject.toml`, detecta el runner (uv, poetry, pip) por la presencia de lock files, y construye los comandos de install/test
-- **Make**: parsea las líneas del Makefile que terminan en `:` (targets)
-
-### Variables de entorno — dos fuentes
-
-1. **Archivos de código fuente**: regex por lenguaje que detecta `process.env.VAR`, `os.environ['VAR']`, `os.Getenv("VAR")`, `ENV['VAR']`, etc.
-2. **Archivos `.env.example`**, `.env.template`, `.env.sample`: se parsean línea a línea buscando `VAR_NAME=`
-
-Resultado: lista ordenada de nombres de variables únicas. Si el proyecto no tiene variables de entorno referencidas en código, el campo queda vacío y se omite de AGENTS.md.
-
-### Entry points — inferencia de rol
-
-Archivos cuyo stem (nombre sin extensión) es `index`, `main`, `app`, `server`, `program`, `bootstrap` o `startup` se detectan como entry points. Para cada uno se infiere un rol basado en el path completo:
-- Si el path contiene `server` → "HTTP server bootstrap"
-- Si contiene `electron` → "Electron main process"
-- Si el stem es `main` → "Application entry point"
-- etc.
-
-Se evitan duplicados por directorio (si hay `index.js` e `index.ts` en el mismo dir, solo aparece uno).
-
-### Diff semántico en el payload
-
-Para archivos `"modified"` con historial en cache, se computa el diff semántico:
-- Se llama a `diff_analysis(old_symbols, new_symbols)`
-- Cada símbolo del diff se clasifica con `classify_impact`
-- Se filtra por `impact_threshold`
-- Si después del filtro no queda nada → el archivo se omite del payload (por debajo del threshold)
-
-Esto es clave: no todo cambio de archivo produce entrada en el payload.
-
-### Archivos de test — tratamiento especial
-
-`_is_test_file` detecta archivos de test por nombre y path (`test_`, `_test.py`, `.spec.ts`, `/tests/`, `/__tests__/`, etc.). Estos archivos se procesan por separado y al final se colapsan en un resumen por directorio via `_summarize_test_files`. En vez de listar 200 tests con sus funciones, el payload dice: "en `TPark.Service.Tests/` hay 47 archivos con 312 funciones de test". Claude usa esto para la sección de Testing Instructions sin que el payload explote de tamaño.
-
-### _build_instructions — el prompt embebido
-
-El campo `instructions` del payload ES un prompt para Claude. Define:
-- Qué debe hacer (CREATE o UPDATE)
-- Reglas absolutas (no leer archivos, no llamar al tool de nuevo, no inventar comandos)
-- Cómo usar cada campo del payload (qué sintetizar, qué copiar verbatim)
-- El formato exacto de cada sección de AGENTS.md
-
-Es el documento que hace que el output de Claude sea consistente independientemente del modelo.
-
-### _is_public / _slim_symbol
-
-- `_is_public(sym)`: filtra symbols privados (visibility `private`/`protected` o nombres que empiezan con `_`)
-- `_slim_symbol(sym)`: reduce un símbolo a solo los campos que Claude necesita para AGENTS.md — elimina `line_start`, `line_end`, `parent` que no son útiles para el output
-
-## Funciones principales
+## Funciones
 
 | Función | Qué hace |
 |---|---|
-| `build_payload(...)` | Ensambla el JSON payload completo |
-| `_detect_build_systems(root)` | Detecta herramientas de build y extrae scripts ejecutables |
-| `_scan_project_structure(root, config)` | Escanea directorios, config files, CI files, test dirs |
-| `_detect_env_vars(root, config)` | Detecta variables de entorno en código y archivos `.env.*` |
-| `_detect_entry_points(root, config)` | Detecta archivos de bootstrap e infiere su rol |
-| `_build_instructions(has_existing)` | Construye el prompt embebido en el payload |
-| `_is_test_file(path)` | Detecta si un archivo es de test por nombre/path |
-| `_summarize_test_files(entries)` | Colapsa archivos de test en resúmenes por directorio |
-| `_format_full(path, status, analysis)` | Formatea un archivo para `full_analysis` con símbolos públicos |
-| `_is_public(sym)` | Filtra símbolos privados |
-| `_slim_symbol(sym)` | Reduce símbolo a los campos necesarios para el payload |
-| `_passes_threshold(impact, threshold)` | Verifica si un impacto supera el threshold configurado |
+| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Única función pública. Ensambla y retorna el payload completo como dict |
+
+Ver los módulos especializados para el detalle de cada responsabilidad:
+- [`build_system.md`](build_system.md) — detección de build tools y scripts
+- [`project_scanner.md`](project_scanner.md) — escaneo de estructura, env vars, entry points
+- [`aggregator.md`](aggregator.md) — colapso de directorios con patrón común
+- [`symbol_utils.md`](symbol_utils.md) — filtrado y formateo de símbolos
+- [`instructions.md`](instructions.md) — el prompt embebido en el payload

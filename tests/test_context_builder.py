@@ -7,14 +7,11 @@ import pytest
 
 from agents_md_mcp.cache import make_empty_cache
 from agents_md_mcp.config import load_config
-from agents_md_mcp.context_builder import (
-    _aggregate_by_directory,
-    _detect_build_systems,
-    _extract_class_pattern,
-    _passes_threshold,
-    _scan_project_structure,
-    build_payload,
-)
+from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern
+from agents_md_mcp.build_system import _detect_build_systems
+from agents_md_mcp.context_builder import build_payload
+from agents_md_mcp.project_scanner import _scan_project_structure
+from agents_md_mcp.symbol_utils import _passes_threshold
 from agents_md_mcp.models import CachedFile, FileAnalysis, FileChange, SymbolInfo
 
 

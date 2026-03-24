@@ -1,0 +1,128 @@
+"""Collapses large sets of similar files into directory-level summaries."""
+
+from pathlib import Path
+
+_COMMON_METHOD_FREQUENCY = 0.6  # method must appear in >= 60% of files to be "common"
+_AGGREGATION_SAMPLE_SIZE = 3    # number of sample files to include in directory summary
+_PATTERN_COVERAGE_THRESHOLD = 0.4  # common methods must cover >= 40% of avg symbols per file
+
+
+def _extract_common_methods(entries: list[dict]) -> list[str]:
+    """Return method/function names that appear in >= 60% of the given file entries."""
+    if not entries:
+        return []
+    method_counts: dict[str, int] = {}
+    for entry in entries:
+        seen = {s["name"] for s in entry.get("symbols", [])}
+        for name in seen:
+            method_counts[name] = method_counts.get(name, 0) + 1
+    cutoff = len(entries) * _COMMON_METHOD_FREQUENCY
+    return sorted(name for name, count in method_counts.items() if count >= cutoff)
+
+
+def _extract_class_pattern(entries: list[dict]) -> str | None:
+    """Detect a common suffix or prefix in class names across entries (e.g. '*Service')."""
+    class_names = [
+        s["name"]
+        for entry in entries
+        for s in entry.get("symbols", [])
+        if s.get("kind") == "class"
+    ]
+    if len(class_names) < 2:
+        return None
+
+    # Check common suffix (most frequent in real codebases) — longest match first
+    for length in range(11, 2, -1):
+        suffix = class_names[0][-length:] if len(class_names[0]) >= length else None
+        if suffix and all(n.endswith(suffix) for n in class_names):
+            return f"*{suffix}"
+
+    # Check common prefix — longest match first
+    for length in range(11, 2, -1):
+        prefix = class_names[0][:length] if len(class_names[0]) >= length else None
+        if prefix and all(n.startswith(prefix) for n in class_names):
+            return f"{prefix}*"
+
+    return None
+
+
+def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
+    """
+    Group full_analysis entries by directory. Directories with >= threshold files
+    of the same dominant language are collapsed into a single directory summary.
+    Directories below threshold, or where no meaningful common pattern exists,
+    are kept as individual file entries.
+    """
+    # Group by parent directory
+    by_dir: dict[str, list[dict]] = {}
+    for entry in entries:
+        parent = str(Path(entry["file"]).parent)
+        by_dir.setdefault(parent, []).append(entry)
+
+    result: list[dict] = []
+
+    for directory, dir_entries in sorted(by_dir.items()):
+        # Group entries within this directory by language
+        by_lang: dict[str, list[dict]] = {}
+        for entry in dir_entries:
+            by_lang.setdefault(entry["language"], []).append(entry)
+
+        # Find the dominant language group
+        dominant_lang, dominant_entries = max(by_lang.items(), key=lambda kv: len(kv[1]))
+        minority_entries = [e for lang, entries in by_lang.items() for e in entries if lang != dominant_lang]
+
+        if len(dominant_entries) < threshold:
+            # Not enough files to aggregate — keep all individual
+            result.extend(dir_entries)
+            continue
+
+        common_methods = _extract_common_methods(dominant_entries)
+
+        avg_symbols = sum(len(e.get("symbols", [])) for e in dominant_entries) / len(dominant_entries)
+        coverage = len(common_methods) / avg_symbols if avg_symbols > 0 else 0
+
+        if len(common_methods) < 2 or coverage < _PATTERN_COVERAGE_THRESHOLD:
+            # Pattern too weak to be useful — keep individual
+            result.extend(dir_entries)
+            continue
+
+        common_method_set = set(common_methods)
+        class_pattern = _extract_class_pattern(dominant_entries)
+
+        # Outliers: files that have symbols NOT in common_methods (unique behavior)
+        outliers = []
+        for entry in dominant_entries:
+            unique = [
+                s for s in entry.get("symbols", [])
+                if s["name"] not in common_method_set
+            ]
+            if unique:
+                outliers.append({
+                    "file": entry["file"],
+                    "unique_symbols": [s["name"] for s in unique[:5]],
+                })
+
+        # Sample files: first, middle, last for representativeness
+        n = len(dominant_entries)
+        indices = sorted({0, n // 2, n - 1})
+        sample_files = [dominant_entries[i]["file"] for i in indices]
+
+        summary: dict = {
+            "directory": (directory + "/").replace("//", "/"),
+            "kind": "directory_summary",
+            "file_count": len(dominant_entries),
+            "language": dominant_lang,
+            "common_methods": common_methods,
+        }
+        if class_pattern:
+            summary["class_pattern"] = class_pattern
+        if outliers:
+            summary["outliers"] = outliers[:5]  # cap at 5 to control size
+        summary["sample_files"] = sample_files
+
+        result.append(summary)
+
+        # Minority language files in the same dir are always kept individual
+        result.extend(minority_entries)
+
+    return result

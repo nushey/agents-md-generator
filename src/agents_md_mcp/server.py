@@ -1,12 +1,14 @@
 """agents-md-generator MCP Server.
 
-Exposes a single tool: generate_agents_md.
+Exposes two tools:
+- generate_agents_md: runs the full analysis pipeline and writes the payload to disk.
+- get_payload_chunk: streams the payload back in 500-line chunks until has_more is false.
 
 Architecture: the server does all heavy analysis (tree-sitter, change detection,
-caching) and writes the payload to .agents-payload.json. It returns a small
-response (~1k chars) that tells Claude Code exactly how to proceed — including
-how to read the payload in chunks if it is large. Claude Code never receives
-a large payload over the MCP wire.
+caching) and writes a temporary payload.json to the user cache directory. It returns
+a small response (~1k chars) with step-by-step instructions for the AI client to
+retrieve the payload via get_payload_chunk and write AGENTS.md. No large data travels
+over the MCP wire, and no filesystem access is required from the client side.
 """
 
 import json
@@ -28,7 +30,7 @@ from .cache import (
 from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
-from .context_builder import _is_public, _is_test_file
+from .symbol_utils import _is_public, _is_test_file
 from .models import CachedFile, CachedSymbol, GenerateAgentsMdInput, GetPayloadChunkInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)

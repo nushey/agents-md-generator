@@ -8,10 +8,6 @@ version = "0.2.3"
 description = "MCP server that analyzes codebases and generates AGENTS.md files"
 readme = "README.md"
 license = { text = "MIT" }
-
-[project.urls]
-Homepage = "https://github.com/nushey/agents-md-generator"
-Source = "https://github.com/nushey/agents-md-generator"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -28,6 +24,10 @@ dependencies = [
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-ruby>=0.23.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/nushey/agents-md-generator"
+Source = "https://github.com/nushey/agents-md-generator"
 
 [project.optional-dependencies]
 dev = [

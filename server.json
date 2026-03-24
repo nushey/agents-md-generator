@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nushey/agents-md-generator",
+  "title": "AGENTS.md Generator",
+  "description": "Analyzes codebases with tree-sitter and generates AGENTS.md files for AI coding agents.",
+  "repository": {
+    "url": "https://github.com/nushey/agents-md-generator",
+    "source": "github"
+  },
+  "version": "0.2.3",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "agents-md-generator",
+      "version": "0.2.3",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from pathlib import Path
 _COMMON_METHOD_FREQUENCY = 0.6  # method must appear in >= 60% of files to be "common"
 _AGGREGATION_SAMPLE_SIZE = 3    # number of sample files to include in directory summary
 _PATTERN_COVERAGE_THRESHOLD = 0.4  # common methods must cover >= 40% of avg symbols per file
+_DTO_METHOD_RATIO_THRESHOLD = 0.8  # >= 80% of files must have zero methods to be a DTO dir
 
 
 def _extract_common_methods(entries: list[dict]) -> list[str]:
@@ -46,6 +47,27 @@ def _extract_class_pattern(entries: list[dict]) -> str | None:
     return None
 
 
+def _is_dto_directory(entries: list[dict]) -> bool:
+    """Return True if entries look like a DTO/entity directory.
+
+    Heuristic: >= 80% of files have only class symbols with no methods.
+    These directories have no "common methods" pattern but are still worth
+    collapsing — they're pure data containers, one class per file.
+    """
+    if not entries:
+        return False
+    methodless = sum(
+        1 for e in entries
+        if all(
+            s.get("kind") == "class" and not s.get("methods")
+            for s in e.get("symbols", [])
+            if s.get("kind") == "class"
+        )
+        and any(s.get("kind") == "class" for s in e.get("symbols", []))
+    )
+    return (methodless / len(entries)) >= _DTO_METHOD_RATIO_THRESHOLD
+
+
 def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
     """
     Group full_analysis entries by directory. Directories with >= threshold files
@@ -82,8 +104,26 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
         coverage = len(common_methods) / avg_symbols if avg_symbols > 0 else 0
 
         if len(common_methods) < 2 or coverage < _PATTERN_COVERAGE_THRESHOLD:
-            # Pattern too weak to be useful — keep individual
-            result.extend(dir_entries)
+            # No shared method pattern — check for DTO/entity directory before giving up
+            if _is_dto_directory(dominant_entries):
+                n = len(dominant_entries)
+                indices = sorted({0, n // 2, n - 1})
+                dto_summary: dict = {
+                    "directory": (directory + "/").replace("//", "/"),
+                    "kind": "directory_summary",
+                    "file_count": len(dominant_entries),
+                    "language": dominant_lang,
+                    "common_methods": [],
+                    "note": "DTO/entity classes — data containers with no methods",
+                    "sample_files": [dominant_entries[i]["file"] for i in indices],
+                }
+                class_pattern = _extract_class_pattern(dominant_entries)
+                if class_pattern:
+                    dto_summary["class_pattern"] = class_pattern
+                result.append(dto_summary)
+                result.extend(minority_entries)
+            else:
+                result.extend(dir_entries)
             continue
 
         common_method_set = set(common_methods)

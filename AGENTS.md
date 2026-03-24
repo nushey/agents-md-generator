@@ -79,7 +79,7 @@ uv run agents-md-generator
 uv run pytest
 ```
 
-Tests live in `tests/` (8 files, ~100 test functions, Python). Fixture source files for AST parsing are in `tests/fixtures/`.
+Tests live in `tests/` (Python). Fixture source files for AST parsing are in `tests/fixtures/`.
 
 ## Keeping AGENTS.md Up to Date
 

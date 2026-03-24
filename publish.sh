@@ -21,6 +21,11 @@ if [[ -z "${PYPI_TOKEN:-}" ]]; then
   exit 1
 fi
 
+# Sync version from pyproject.toml into server.json
+VERSION=$(grep '^version = ' "$SCRIPT_DIR/pyproject.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+echo "Version: $VERSION"
+sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" "$SCRIPT_DIR/server.json"
+
 # Clean old dist
 echo "Removing old dist..."
 rm -rf "$SCRIPT_DIR/dist"
@@ -29,8 +34,16 @@ rm -rf "$SCRIPT_DIR/dist"
 echo "Building..."
 uv build
 
-# Publish
+# Publish to PyPI
 echo "Publishing to PyPI..."
 uv publish --token "$PYPI_TOKEN"
+
+# Publish to MCP Registry
+echo "Publishing to MCP Registry..."
+if ! command -v mcp-publisher &>/dev/null; then
+  echo "Error: mcp-publisher not found. Install it first."
+  exit 1
+fi
+mcp-publisher publish
 
 echo "Done."

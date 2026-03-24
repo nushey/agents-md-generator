@@ -100,6 +100,63 @@ def test_not_excluded_regular_js() -> None:
     assert not _is_excluded("src/bundle.js", cfg)
 
 
+# ── _is_excluded: vendor directories ─────────────────────────────────────────
+
+def test_excluded_bower_components() -> None:
+    cfg = load_config("/tmp")
+    assert _is_excluded("bower_components/angular/angular.js", cfg)
+    assert _is_excluded("app/bower_components/lodash/lodash.js", cfg)
+
+
+def test_excluded_app_lib() -> None:
+    """AngularJS vendor pattern: app/lib/."""
+    cfg = load_config("/tmp")
+    assert _is_excluded("MyApp/app/lib/angular/angular.js", cfg)
+    assert _is_excluded("frontend/app/lib/bootstrap/bootstrap.js", cfg)
+
+
+def test_excluded_wwwroot_lib() -> None:
+    """ASP.NET vendor pattern: wwwroot/lib/."""
+    cfg = load_config("/tmp")
+    assert _is_excluded("MyApp/wwwroot/lib/jquery/jquery.js", cfg)
+    assert _is_excluded("MyApp/wwwroot/libs/bootstrap/bootstrap.js", cfg)
+
+
+def test_excluded_bundle_js() -> None:
+    cfg = load_config("/tmp")
+    assert _is_excluded("dist/app.bundle.js", cfg)
+    assert _is_excluded("static/vendor.bundle.js", cfg)
+
+
+def test_excluded_site_packages() -> None:
+    cfg = load_config("/tmp")
+    assert _is_excluded("lib/python3.12/site-packages/requests/__init__.py", cfg)
+    assert _is_excluded("some/deep/site-packages/foo.py", cfg)
+
+
+def test_excluded_static_public_vendor() -> None:
+    cfg = load_config("/tmp")
+    assert _is_excluded("static/vendor/jquery.js", cfg)
+    assert _is_excluded("public/vendor/bootstrap.js", cfg)
+    assert _is_excluded("assets/vendor/moment.js", cfg)
+
+
+def test_excluded_vendor_windows_backslash_paths() -> None:
+    """Windows backslash paths must be excluded correctly (normalization fix)."""
+    cfg = load_config("/tmp")
+    assert _is_excluded("MyApp\\app\\lib\\angular\\angular.js", cfg)
+    assert _is_excluded("MyApp\\wwwroot\\lib\\jquery.js", cfg)
+    assert _is_excluded("frontend\\bower_components\\react\\index.js", cfg)
+    assert _is_excluded("src\\__pycache__\\foo.pyc", cfg)
+
+
+def test_not_excluded_app_services() -> None:
+    """app/services/ must NOT be excluded — only app/lib/ is vendor."""
+    cfg = load_config("/tmp")
+    assert not _is_excluded("app/services/user.go", cfg)
+    assert not _is_excluded("app/controllers/home.cs", cfg)
+
+
 # ── _filter_paths ─────────────────────────────────────────────────────────────
 
 def test_filter_removes_excluded(tmp_path: Path) -> None:

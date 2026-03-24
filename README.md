@@ -130,11 +130,12 @@ This flow is pure MCP — no filesystem access required from the client side. An
 All runtime artifacts are stored **outside your project**, in the user cache directory:
 
 ```
-~/.cache/agents-md-generator/<project-hash>/cache.json    ← incremental scan cache
-~/.cache/agents-md-generator/<project-hash>/payload.json  ← temporary, deleted after last chunk read
+~/.cache/agents-md-generator/<project-hash>/cache.json  ← incremental scan cache
 ```
 
 The `<project-hash>` is a SHA-256 of the project's absolute path — unique per project. Nothing is written to your repository.
+
+> **Note:** The server also writes a temporary `payload.json` to this directory during analysis, but it is managed entirely by the `get_payload_chunk` tool and deleted automatically after the last chunk is read. You never need to access it directly.
 
 ---
 

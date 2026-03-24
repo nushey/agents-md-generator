@@ -434,14 +434,14 @@ def _extract_class_pattern(entries: list[dict]) -> str | None:
     if len(class_names) < 2:
         return None
 
-    # Check common suffix (most frequent in real codebases)
-    for length in range(3, 12):
+    # Check common suffix (most frequent in real codebases) — longest match first
+    for length in range(11, 2, -1):
         suffix = class_names[0][-length:] if len(class_names[0]) >= length else None
         if suffix and all(n.endswith(suffix) for n in class_names):
             return f"*{suffix}"
 
-    # Check common prefix
-    for length in range(3, 12):
+    # Check common prefix — longest match first
+    for length in range(11, 2, -1):
         prefix = class_names[0][:length] if len(class_names[0]) >= length else None
         if prefix and all(n.startswith(prefix) for n in class_names):
             return f"{prefix}*"
@@ -696,11 +696,11 @@ of the project:
 ## Keeping AGENTS.md Up to Date
 
 This file is generated and maintained by the `agents-md-generator` MCP tool.
-**Never edit it manually.** To regenerate after code changes, ask Claude Code:
+**Never edit it manually.** To regenerate after code changes, ask your AI assistant:
 
 > "Update the AGENTS.md for this project"
 
-Claude will invoke the `generate_agents_md` tool automatically, perform an
+The assistant will invoke the `generate_agents_md` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
 ```

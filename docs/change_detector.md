@@ -30,10 +30,10 @@ Solo los archivos que pasan los cuatro llegan al análisis.
 `fnmatch` por defecto no trata `**` como un wildcard de múltiples segmentos — trata `*` como "cualquier cosa incluido `/`". El problema es con patrones como `**/node_modules/**` cuando el path es `src/node_modules/lodash/index.js`.
 
 La solución tiene dos pasos:
-1. `fnmatch.fnmatch(path, pattern)` — funciona para `**/*.min.js` y similar
+1. `fnmatch.fnmatch(normalized, pattern)` — el path se normaliza primero a forward slashes para que patrones como `**/app/lib/**` funcionen en Windows (donde los paths tienen backslashes)
 2. Extracción del token interno: `**/node_modules/**` → `node_modules`, y se verifica si algún componente del path hace match con ese token
 
-Esto cubre el caso donde el directorio excluido está en medio del path.
+Esto cubre el caso donde el directorio excluido está en medio del path, y garantiza comportamiento consistente cross-platform.
 
 ### Cold start vs Incremental
 

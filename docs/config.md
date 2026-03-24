@@ -40,7 +40,11 @@ Los defaults excluyen directorios que nunca tienen código relevante para AGENTS
 - Outputs: `dist`, `build`, `bin`, `obj`
 - Entornos virtuales: `.venv`, `venv`
 - Cache de Python: `__pycache__`
-- Assets minificados: `*.min.js`, `*.min.css`
+- Assets minificados: `*.min.js`, `*.min.css`, `*.bundle.js`
+- Vendor frontend: `bower_components`, `app/lib` (AngularJS), `wwwroot/lib`, `wwwroot/libs` (ASP.NET), `static/vendor`, `public/vendor`, `assets/vendor`
+- Dependencias Python instaladas en el repo: `site-packages`
+
+Los proyectos pueden extender o reemplazar esta lista vía `.agents-config.json`.
 
 ### max_file_size_bytes
 

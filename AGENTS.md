@@ -2,69 +2,60 @@
 
 ## Project Overview
 
-`agents-md-generator` is a Python MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and generates `AGENTS.md` files for AI coding agents. It supports Python, TypeScript, JavaScript, Go, and C#. The architecture is a sequential pipeline: change detection → AST analysis → payload assembly → MCP tool exposure, with an incremental caching layer to avoid full rescans on every call.
-
----
+`agents-md-generator` is a Python MCP (Model Context Protocol) server that analyzes codebases using tree-sitter AST parsing and generates `AGENTS.md` files — structured context documents for AI coding agents. The tool performs incremental, cache-aware scans across Python, TypeScript/JavaScript, Go, and C# projects, then instructs the connected AI assistant to write the final document. The architecture is a linear pipeline: detect changes → analyze AST → build payload → serve via MCP → Claude writes AGENTS.md.
 
 ## Architecture & Data Flow
 
-### Module Inventory
+### Module inventory
 
-- `src/agents_md_mcp/` — Core package: MCP server, pipeline orchestration, caching, config, and payload assembly.
-- `src/agents_md_mcp/languages/` — Language-specific AST analyzers, one per supported language, all extending a shared abstract base.
-- `tests/` — Pytest test suite covering all pipeline modules.
-- `tests/fixtures/` — Sample source files in each supported language, used as AST parsing inputs in tests.
-- `docs/` — Project documentation.
+- `src/agents_md_mcp/` — Core package: MCP server, analysis pipeline, caching, and all domain logic.
+- `src/agents_md_mcp/languages/` — Per-language AST analyzer implementations behind a common abstract interface.
+- `tests/` — Pytest unit and integration test suite covering the full pipeline.
+- `tests/fixtures/` — Sample source files (`.py`, `.ts`, `.go`, `.cs`) used as AST parsing targets in tests.
+- `docs/` — Project documentation and design notes.
 
-### Data Flow
+### Data flow
 
 ```
-change_detector  →  ast_analyzer  →  context_builder  →  server (MCP tools)
-     ↑                   ↑
-   cache.py          languages/
-   config.py
+change_detector  →  ast_analyzer  →  context_builder  →  server (MCP tools)  →  Claude writes AGENTS.md
+     ↕                                      ↕
+   cache                               project_scanner / build_system / gitignore
 ```
 
-1. `change_detector.detect_changes` compares the current state against the cache to produce a list of `FileChange` objects.
-2. `ast_analyzer.analyze_changes` selects the appropriate `LanguageAnalyzer` via `build_analyzer` and extracts public symbols from changed files.
-3. `context_builder.build_payload` merges new analyses with cached data into a structured JSON payload.
-4. `server.py` exposes two MCP tools (`generate_agents_md`, `get_payload_chunk`) that orchestrate the pipeline and stream the payload back to the caller in chunks.
-
----
+1. `change_detector.detect_changes` compares the current git state against the cache to produce a list of `FileChange` objects.
+2. `ast_analyzer.analyze_changes` dispatches each changed file to the appropriate `LanguageAnalyzer`, returning a `dict[str, FileAnalysis]`.
+3. `context_builder.build_payload` merges new analyses with cached data into a structured JSON payload saved to `.agents-payload.json`.
+4. `server.generate_agents_md` (MCP tool) orchestrates the above and returns instructions to Claude.
+5. Claude calls `server.get_payload_chunk` repeatedly to retrieve the payload, then writes `AGENTS.md`.
 
 ## Conventions & Patterns
 
-### Adding a New Language Analyzer
+### Adding a new language analyzer
 
-Each supported language has exactly one analyzer class in `src/agents_md_mcp/languages/<language>.py` following this contract:
+Each supported language has exactly one analyzer class in `src/agents_md_mcp/languages/<language>.py`:
 
-1. Create `src/agents_md_mcp/languages/<language>.py`.
-2. Define a class `<Language>Analyzer(LanguageAnalyzer)` implementing `language_key` (returns the string key) and `analyze` (returns a `FileAnalysis`).
-3. Register it in `ast_analyzer.build_analyzer` so it can be resolved by language key.
-
-JavaScript reuses the TypeScript analyzer via inheritance (`JavaScriptAnalyzer(TypeScriptAnalyzer)`) — apply the same pattern for closely related languages.
+- Class name: `<Language>Analyzer` extending `LanguageAnalyzer` (ABC from `languages/base.py`).
+- Must implement two abstract methods: `language_key() -> str` and `analyze(file_path, source) -> FileAnalysis`.
+- Register the new analyzer in `ast_analyzer.build_analyzer` so it can be resolved by language key.
+- Add at least one fixture file in `tests/fixtures/sample.<ext>` for parser testing.
 
 ### Models
 
-All data structures are Pydantic `BaseModel` subclasses defined in `src/agents_md_mcp/models.py`. Add new models there; do not define them inline in other modules.
+All data structures are Pydantic `BaseModel` subclasses defined in `src/agents_md_mcp/models.py`. Add new models there — never define inline dataclasses elsewhere.
 
-### MCP Tools
+### MCP tools
 
-MCP tools live exclusively in `src/agents_md_mcp/server.py` and are registered with the `@mcp.tool` decorator. Tool input schemas are Pydantic models defined in `models.py`.
+The two public MCP tools live exclusively in `src/agents_md_mcp/server.py` and are decorated with `@mcp.tool`. Business logic must not live in `server.py`; delegate to the appropriate pipeline module.
 
-### Chunk-Based Payload Transfer
+### Cache
 
-The payload is written to `.agents-payload.json` and read back in indexed chunks via `get_payload_chunk`. The file is deleted after the last chunk is consumed. This pattern avoids large MCP wire payloads — preserve it when adding new data to the payload.
-
----
+Cache I/O is fully encapsulated in `src/agents_md_mcp/cache.py`. All other modules receive `CacheData | None` — they never read/write the cache file directly.
 
 ## Environment Variables
 
 | Variable | Purpose |
-|---|---|
-| `PYPI_TOKEN` | PyPI API token used by `publish.sh` to publish the package. |
-
----
+|----------|---------|
+| `PYPI_TOKEN` | Authentication token used to publish the package to PyPI via `publish.sh`. |
 
 ## Setup Commands
 
@@ -72,13 +63,15 @@ The payload is written to `.agents-payload.json` and read back in indexed chunks
 uv sync
 ```
 
-The server bootstrap is `src/agents_md_mcp/server.py`. To run the MCP server:
+The MCP server bootstrap is `src/agents_md_mcp/server.py`. The `main()` function is the entry point registered in `pyproject.toml`.
+
+## Development Workflow
+
+Run the CLI entry point:
 
 ```bash
 uv run agents-md-generator
 ```
-
----
 
 ## Testing Instructions
 
@@ -86,17 +79,15 @@ uv run agents-md-generator
 uv run pytest
 ```
 
-Tests live in `tests/` (81 test functions across 7 modules). Fixtures for AST parsing are in `tests/fixtures/` — one sample file per supported language.
-
----
+Tests live in `tests/` (8 files, ~100 test functions, Python). Fixture source files for AST parsing are in `tests/fixtures/`.
 
 ## Keeping AGENTS.md Up to Date
 
 This file is generated and maintained by the `agents-md-generator` MCP tool.
-**Never edit it manually.** To regenerate after code changes, ask Claude Code:
+**Never edit it manually.** To regenerate after code changes, ask your AI assistant:
 
 > "Update the AGENTS.md for this project"
 
-Claude will invoke the `generate_agents_md` tool automatically, perform an
+The assistant will invoke the `generate_agents_md` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".

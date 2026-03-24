@@ -7,7 +7,7 @@ import pytest
 
 from agents_md_mcp.cache import make_empty_cache
 from agents_md_mcp.config import load_config
-from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern
+from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern, _is_dto_directory
 from agents_md_mcp.build_system import _detect_build_systems
 from agents_md_mcp.context_builder import build_payload
 from agents_md_mcp.project_scanner import _scan_project_structure
@@ -301,3 +301,90 @@ def test_extract_class_pattern_too_few_classes() -> None:
     entries = [_file_entry("a.py", "python", [_sym_dict("OnlyOne", "class")])]
     pattern = _extract_class_pattern(entries)
     assert pattern is None
+
+
+# ── _is_dto_directory ─────────────────────────────────────────────────────────
+
+def _dto_entry(file: str, class_name: str) -> dict:
+    """A file entry with one class and no methods — canonical DTO shape."""
+    return {"file": file, "language": "c_sharp", "symbols": [
+        {"name": class_name, "kind": "class", "signature": f"public class {class_name}", "methods": []}
+    ]}
+
+
+def test_is_dto_directory_pure_dtos() -> None:
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(8)]
+    assert _is_dto_directory(entries)
+
+
+def test_is_dto_directory_not_dtos_with_methods() -> None:
+    entries = [
+        {"file": f"src/svc{i}.cs", "language": "c_sharp", "symbols": [
+            {"name": f"Service{i}", "kind": "class", "methods": ["Get", "Save"]}
+        ]}
+        for i in range(8)
+    ]
+    assert not _is_dto_directory(entries)
+
+
+def test_is_dto_directory_mixed_mostly_dtos() -> None:
+    """80% DTOs + 20% with methods → still a DTO directory."""
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(8)]
+    entries.append({"file": "Entities/Special.cs", "language": "c_sharp", "symbols": [
+        {"name": "Special", "kind": "class", "methods": ["Compute"]}
+    ]})
+    entries.append({"file": "Entities/Other.cs", "language": "c_sharp", "symbols": [
+        {"name": "Other", "kind": "class", "methods": ["Run"]}
+    ]})
+    # 8/10 = 80% → exactly at threshold
+    assert _is_dto_directory(entries)
+
+
+def test_is_dto_directory_mixed_too_many_with_methods() -> None:
+    """Less than 80% DTOs → not a DTO directory."""
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(6)]
+    for i in range(4):
+        entries.append({"file": f"src/svc{i}.cs", "language": "c_sharp", "symbols": [
+            {"name": f"Service{i}", "kind": "class", "methods": ["Get"]}
+        ]})
+    # 6/10 = 60% → below threshold
+    assert not _is_dto_directory(entries)
+
+
+def test_is_dto_directory_empty_entries() -> None:
+    assert not _is_dto_directory([])
+
+
+# ── _aggregate_by_directory: DTO directories ─────────────────────────────────
+
+def test_aggregate_dto_directory_produces_summary() -> None:
+    """A directory of DTO classes (no methods) above threshold → directory_summary."""
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"OrderDto{i}") for i in range(8)]
+    result = _aggregate_by_directory(entries, threshold=8)
+    assert len(result) == 1
+    summary = result[0]
+    assert summary["kind"] == "directory_summary"
+    assert summary["file_count"] == 8
+    assert summary["note"] == "DTO/entity classes — data containers with no methods"
+
+
+def test_aggregate_dto_directory_includes_class_pattern() -> None:
+    entries = [_dto_entry(f"Entities/f{i}.cs", f"OrderDto{i}") for i in range(8)]
+    result = _aggregate_by_directory(entries, threshold=8)
+    summary = result[0]
+    assert "class_pattern" in summary
+    assert "Dto" in summary["class_pattern"]
+
+
+def test_aggregate_dto_directory_includes_sample_files() -> None:
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(8)]
+    result = _aggregate_by_directory(entries, threshold=8)
+    assert "sample_files" in result[0]
+    assert len(result[0]["sample_files"]) <= 3
+
+
+def test_aggregate_dto_below_threshold_keeps_individual() -> None:
+    """DTO directory below threshold → individual files, no summary."""
+    entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(4)]
+    result = _aggregate_by_directory(entries, threshold=8)
+    assert all(e.get("kind") != "directory_summary" for e in result)

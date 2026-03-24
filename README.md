@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.nushey/agents-md-generator -->
 # agents-md-generator
 
 MCP server that analyzes codebases with [tree-sitter](https://tree-sitter.github.io/) and generates [`AGENTS.md`](https://agents.md/) files.

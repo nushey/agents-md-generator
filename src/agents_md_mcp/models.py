@@ -23,7 +23,7 @@ class SymbolInfo(BaseModel):
     name: str
     kind: Literal[
         "class", "method", "function", "interface",
-        "enum", "struct", "property", "field"
+        "enum", "struct", "property", "field", "constructor"
     ]
     visibility: Optional[str] = None
     signature: Optional[str] = None
@@ -59,7 +59,7 @@ class CachedSymbol(BaseModel):
     name: str
     kind: Literal[
         "class", "method", "function", "interface",
-        "enum", "struct", "property", "field"
+        "enum", "struct", "property", "field", "constructor"
     ]
     visibility: Optional[str] = None
     signature: Optional[str] = None

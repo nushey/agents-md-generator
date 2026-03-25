@@ -16,7 +16,7 @@ _KIND_MAP = {
     "struct_declaration": "struct",
     "enum_declaration": "enum",
     "method_declaration": "method",
-    "constructor_declaration": "method",
+    "constructor_declaration": "constructor",
     "property_declaration": "property",
     "field_declaration": "field",
 }
@@ -75,6 +75,10 @@ def _extract_attributes(node: Node, source: bytes) -> list[str]:
 
 
 def _build_cs_signature(node: Node, source: bytes, kind: str, name: str, visibility: str) -> str:
+    if kind == "constructor":
+        params_node = node.child_by_field_name("parameters")
+        params = _node_text(params_node, source) if params_node else "()"
+        return f"{visibility} {name}{params}"
     if kind == "method":
         params_node = node.child_by_field_name("parameters")
         ret_node = node.child_by_field_name("type")

@@ -76,6 +76,15 @@ def _is_minified(analysis: FileAnalysis) -> bool:
 
 _MAX_METHODS_PER_SYMBOL = 15
 _MAX_SYMBOLS_PER_FILE = 25
+_MAX_PROPERTIES_PER_CLASS = 8
+
+_MEMBER_CONTAINER_KINDS = frozenset({"class", "interface", "struct"})
+
+
+def _extract_property_type_name(sig: str) -> str:
+    """Extract 'Type Name' from a property signature like 'public Type Name'."""
+    parts = sig.split(" ", 1)
+    return parts[1] if len(parts) > 1 else sig
 
 
 def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
@@ -85,8 +94,10 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     or if the file is detected as minified/bundled.
 
     Caps applied:
-    - Methods per class: _MAX_METHODS_PER_SYMBOL (total_methods added when truncated)
-    - Symbols per file: _MAX_SYMBOLS_PER_FILE (total_symbols added when truncated)
+    - Methods per class/interface/struct: _MAX_METHODS_PER_SYMBOL
+    - Properties per class/struct: _MAX_PROPERTIES_PER_CLASS
+    - Symbols per file: _MAX_SYMBOLS_PER_FILE
+    total_methods / total_properties / total_symbols are added when truncated.
     """
     if _is_minified(analysis):
         return None
@@ -95,22 +106,51 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     for sym in analysis.symbols:
         if not _is_public(sym):
             continue
-        if sym.kind == "class":
-            all_methods = [
-                s.name for s in analysis.symbols
-                if s.parent == sym.name and s.kind == "method" and _is_public(s)
-            ]
+        if sym.kind in _MEMBER_CONTAINER_KINDS:
             entry: dict = {
                 "name": sym.name,
                 "kind": sym.kind,
                 "signature": sym.signature,
-                "methods": all_methods[:_MAX_METHODS_PER_SYMBOL],
             }
+
+            # Constructor — only if it has parameters (reveals DI dependencies)
+            constructor = next(
+                (s for s in analysis.symbols
+                 if s.parent == sym.name and s.kind == "constructor" and _is_public(s)),
+                None,
+            )
+            if constructor and constructor.signature:
+                sig = constructor.signature
+                open_p = sig.find("(")
+                close_p = sig.rfind(")")
+                if open_p != -1 and close_p != -1 and sig[open_p + 1:close_p].strip():
+                    entry["constructor"] = sig[open_p:]  # "(Type param, ...)"
+
+            # Methods (capped)
+            all_methods = [
+                s.name for s in analysis.symbols
+                if s.parent == sym.name and s.kind == "method" and _is_public(s)
+            ]
+            entry["methods"] = all_methods[:_MAX_METHODS_PER_SYMBOL]
             if len(all_methods) > _MAX_METHODS_PER_SYMBOL:
                 entry["total_methods"] = len(all_methods)
+
+            # Properties (capped) — classes and structs only; interfaces use methods for contracts
+            if sym.kind in ("class", "struct"):
+                all_props = [
+                    _extract_property_type_name(s.signature or s.name)
+                    for s in analysis.symbols
+                    if s.parent == sym.name and s.kind == "property" and _is_public(s)
+                ]
+                if all_props:
+                    entry["properties"] = all_props[:_MAX_PROPERTIES_PER_CLASS]
+                    if len(all_props) > _MAX_PROPERTIES_PER_CLASS:
+                        entry["total_properties"] = len(all_props)
+
             if sym.decorators:
                 entry["decorators"] = sym.decorators
             symbols_out.append(entry)
+
         elif sym.parent is None:
             entry = {
                 "name": sym.name,

@@ -137,6 +137,91 @@ def test_format_full_class_includes_public_methods() -> None:
     assert "_validate" not in cls["methods"]
 
 
+def test_format_full_constructor_with_params_is_included() -> None:
+    """Constructor with parameters is included as 'constructor' field."""
+    syms = [
+        _sym("OrderService", kind="class"),
+        _sym("OrderService", kind="constructor", sig="public OrderService(IRepository repo)", parent="OrderService"),
+        _sym("Create", kind="method", parent="OrderService"),
+    ]
+    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert "constructor" in cls
+    assert "IRepository" in cls["constructor"]
+
+
+def test_format_full_empty_constructor_is_excluded() -> None:
+    """Constructor with no parameters is not included."""
+    syms = [
+        _sym("SimpleEntity", kind="class"),
+        _sym("SimpleEntity", kind="constructor", sig="public SimpleEntity()", parent="SimpleEntity"),
+        _sym("Id", kind="property", sig="public int Id", parent="SimpleEntity"),
+    ]
+    result = _format_full("src/SimpleEntity.cs", "new", _analysis("src/SimpleEntity.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert "constructor" not in cls
+
+
+def test_format_full_properties_are_included() -> None:
+    """Public properties are listed under the class entry."""
+    syms = [
+        _sym("Product", kind="class"),
+        _sym("Name", kind="property", sig="public string Name", parent="Product"),
+        _sym("Price", kind="property", sig="public decimal Price", parent="Product"),
+    ]
+    result = _format_full("src/Product.cs", "new", _analysis("src/Product.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert "string Name" in cls["properties"]
+    assert "decimal Price" in cls["properties"]
+
+
+def test_format_full_properties_capped_with_total() -> None:
+    """Properties exceeding cap are truncated and total_properties is added."""
+    from agents_md_mcp.symbol_utils import _MAX_PROPERTIES_PER_CLASS
+    syms = [_sym("BigEntity", kind="class")] + [
+        _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigEntity")
+        for i in range(_MAX_PROPERTIES_PER_CLASS + 3)
+    ]
+    result = _format_full("src/BigEntity.cs", "new", _analysis("src/BigEntity.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert len(cls["properties"]) == _MAX_PROPERTIES_PER_CLASS
+    assert cls["total_properties"] == _MAX_PROPERTIES_PER_CLASS + 3
+
+
+def test_format_full_interface_methods_listed() -> None:
+    """Interface methods are listed under the interface entry."""
+    syms = [
+        _sym("IRepository", kind="interface"),
+        _sym("GetAll", kind="method", parent="IRepository"),
+        _sym("Save", kind="method", parent="IRepository"),
+    ]
+    result = _format_full("src/IRepository.cs", "new", _analysis("src/IRepository.cs", "c_sharp", syms))
+    assert result is not None
+    iface = result["symbols"][0]
+    assert iface["kind"] == "interface"
+    assert "GetAll" in iface["methods"]
+    assert "Save" in iface["methods"]
+
+
+def test_format_full_private_property_excluded() -> None:
+    """Private properties are not listed."""
+    syms = [
+        _sym("Service", kind="class"),
+        _sym("_cache", kind="property", sig="private Dictionary _cache", visibility="private", parent="Service"),
+        _sym("Name", kind="property", sig="public string Name", parent="Service"),
+    ]
+    result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    prop_names = [p.split()[-1] for p in cls.get("properties", [])]
+    assert "Name" in prop_names
+    assert "_cache" not in prop_names
+
+
 def test_format_full_top_level_function_not_nested_under_class() -> None:
     syms = [
         _sym("MyClass", kind="class"),

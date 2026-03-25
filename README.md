@@ -236,7 +236,7 @@ Files named `index`, `main`, `app`, `server`, `program`, `bootstrap`, or `startu
 
 ### Public API Surface
 
-Tree-sitter parses each source file and extracts public symbols — classes, functions, methods, interfaces — filtering out private/protected members and underscore-prefixed symbols. These are used to detect naming conventions and export contracts across layers.
+Tree-sitter parses each source file and extracts public symbols — classes, functions, methods, interfaces — filtering out private/protected members and underscore-prefixed symbols. For classes and structs, constructors (when they have parameters) and public properties are also included, revealing dependency injection patterns and data shapes. Interface methods are always included as they define the public contract. These are used to detect naming conventions, DI patterns, and export contracts across layers.
 
 ---
 

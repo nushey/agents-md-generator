@@ -95,6 +95,66 @@ def test_csharp_imports() -> None:
     assert any("System" in imp for imp in result.imports)
 
 
+def test_csharp_constructor_has_own_kind() -> None:
+    """Constructor must be kind='constructor', not 'method'."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    constructors = [s for s in result.symbols if s.kind == "constructor"]
+    assert any(s.name == "OrderService" for s in constructors)
+
+
+def test_csharp_constructor_signature_has_no_void() -> None:
+    """Constructor signature must not include a 'void' return type."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    ctor = next(s for s in result.symbols if s.kind == "constructor" and s.name == "OrderService")
+    assert "void" not in (ctor.signature or "")
+    assert "IRepository" in (ctor.signature or "")
+
+
+def test_csharp_interface_methods_are_public() -> None:
+    """Interface methods without explicit modifier are implicitly public."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    interface_methods = [
+        s for s in result.symbols
+        if s.parent == "IRepository" and s.kind == "method"
+    ]
+    assert len(interface_methods) == 2
+    assert all(s.visibility == "public" for s in interface_methods)
+
+
+def test_csharp_class_members_default_private() -> None:
+    """Class members without modifier default to private."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    validate = next(s for s in result.symbols if s.name == "Validate")
+    assert validate.visibility == "private"
+
+
+def test_csharp_toplevel_class_without_modifier_is_internal() -> None:
+    """Top-level class without access modifier defaults to internal."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    helper = next(s for s in result.symbols if s.name == "InternalHelper")
+    assert helper.visibility == "internal"
+
+
+def test_csharp_properties_extracted() -> None:
+    """Public properties are extracted with correct visibility."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    props = {s.name for s in result.symbols if s.kind == "property" and s.parent == "OrderService"}
+    assert "Id" in props
+    assert "Name" in props
+
+
 # ── TypeScript ────────────────────────────────────────────────────────────────
 
 def test_typescript_class_and_interface() -> None:

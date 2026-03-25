@@ -23,19 +23,42 @@ _KIND_MAP = {
 
 _VISIBILITY_KEYWORDS = {"public", "private", "protected", "internal"}
 
+_TYPE_DECLARATIONS = frozenset({
+    "class_declaration",
+    "interface_declaration",
+    "struct_declaration",
+    "enum_declaration",
+})
+
 
 def _node_text(node: Node, source: bytes) -> str:
     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
 
-def _extract_visibility(node: Node, source: bytes) -> str:
-    """Scan modifiers for visibility keywords."""
+def _extract_visibility(
+    node: Node,
+    source: bytes,
+    in_interface: bool = False,
+    is_nested: bool = False,
+) -> str:
+    """Determine the access modifier for a C# node.
+
+    C# visibility defaults (from the language spec):
+    - Interface members: implicitly public (no explicit modifier for visibility)
+    - Type declarations (class/struct/interface/enum) at top level: internal
+    - Type declarations nested inside another type: private
+    - Class/struct members (methods, fields, properties): private
+    """
     for child in node.children:
         if child.type == "modifier":
             text = _node_text(child, source).lower()
             if text in _VISIBILITY_KEYWORDS:
                 return text
-    return "private"  # C# default
+    if in_interface:
+        return "public"
+    if node.type in _TYPE_DECLARATIONS:
+        return "private" if is_nested else "internal"
+    return "private"
 
 
 def _extract_attributes(node: Node, source: bytes) -> list[str]:
@@ -51,8 +74,7 @@ def _extract_attributes(node: Node, source: bytes) -> list[str]:
     return attrs
 
 
-def _build_cs_signature(node: Node, source: bytes, kind: str, name: str) -> str:
-    visibility = _extract_visibility(node, source)
+def _build_cs_signature(node: Node, source: bytes, kind: str, name: str, visibility: str) -> str:
     if kind == "method":
         params_node = node.child_by_field_name("parameters")
         ret_node = node.child_by_field_name("type")
@@ -87,7 +109,7 @@ class CSharpAnalyzer(LanguageAnalyzer):
         imports: list[str] = []
         symbols: list[SymbolInfo] = []
 
-        self._walk(root, source, imports, symbols, parent_class=None)
+        self._walk(root, source, imports, symbols, parent_class=None, in_interface=False)
 
         return FileAnalysis(
             path=str(path),
@@ -103,6 +125,7 @@ class CSharpAnalyzer(LanguageAnalyzer):
         imports: list[str],
         symbols: list[SymbolInfo],
         parent_class: str | None,
+        in_interface: bool,
     ) -> None:
         if node.type == "using_directive":
             imports.append(_node_text(node, source).strip())
@@ -123,13 +146,17 @@ class CSharpAnalyzer(LanguageAnalyzer):
 
             if name_node:
                 name = _node_text(name_node, source).strip()
-                visibility = _extract_visibility(node, source)
+                visibility = _extract_visibility(
+                    node, source,
+                    in_interface=in_interface,
+                    is_nested=parent_class is not None,
+                )
                 attributes = _extract_attributes(node, source)
                 symbols.append(SymbolInfo(
                     name=name,
                     kind=kind,  # type: ignore[arg-type]
                     visibility=visibility,
-                    signature=_build_cs_signature(node, source, kind, name),
+                    signature=_build_cs_signature(node, source, kind, name, visibility),
                     decorators=attributes,
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,
@@ -140,8 +167,12 @@ class CSharpAnalyzer(LanguageAnalyzer):
                     body = node.child_by_field_name("body")
                     if body:
                         for child in body.children:
-                            self._walk(child, source, imports, symbols, parent_class=name)
+                            self._walk(
+                                child, source, imports, symbols,
+                                parent_class=name,
+                                in_interface=(kind == "interface"),
+                            )
                     return
 
         for child in node.children:
-            self._walk(child, source, imports, symbols, parent_class)
+            self._walk(child, source, imports, symbols, parent_class, in_interface)

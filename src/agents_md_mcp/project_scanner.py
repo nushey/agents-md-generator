@@ -63,7 +63,8 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
         if f.is_file() and not f.name.startswith(".")
     ][:30]
 
-    # Directory summary: file count + dominant extension
+    # Directory summary: file count + languages (capped at depth 3)
+    _MAX_DIR_DEPTH = 3
     dir_summary: dict[str, dict] = {}
     try:
         for item in root.rglob("*"):
@@ -77,28 +78,23 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
             parent_rel = rel_posix(item.parent, root)
             if parent_rel == ".":
                 continue
-            if parent_rel not in dir_summary:
-                dir_summary[parent_rel] = {"file_count": 0, "extensions": {}}
-            dir_summary[parent_rel]["file_count"] += 1
-            ext = item.suffix.lower()
-            if ext:
-                exts = dir_summary[parent_rel]["extensions"]
-                exts[ext] = exts.get(ext, 0) + 1
+            # Cap depth: "a/b/c/d" → "a/b/c" when depth > _MAX_DIR_DEPTH
+            parts = parent_rel.split("/")
+            capped = "/".join(parts[:_MAX_DIR_DEPTH])
+            if capped not in dir_summary:
+                dir_summary[capped] = {"file_count": 0, "languages": set()}
+            dir_summary[capped]["file_count"] += 1
+            lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
+            if lang:
+                dir_summary[capped]["languages"].add(lang)
     except OSError:
         pass
 
     dirs_out: dict[str, dict] = {}
     for d, info in dir_summary.items():
-        primary = None
-        best = 0
-        for ext, count in info["extensions"].items():
-            lang = EXTENSION_TO_LANGUAGE.get(ext)
-            if lang and count > best:
-                primary = lang
-                best = count
         dirs_out[d + "/"] = {
             "file_count": info["file_count"],
-            "primary_language": primary,
+            "languages": ", ".join(sorted(info["languages"])) or None,
         }
 
     # Config files present at root

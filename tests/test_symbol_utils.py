@@ -178,18 +178,32 @@ def test_format_full_properties_are_included() -> None:
     assert "decimal Price" in cls["properties"]
 
 
-def test_format_full_properties_capped_with_total() -> None:
-    """Properties exceeding cap are truncated and total_properties is added."""
-    from agents_md_mcp.symbol_utils import _MAX_PROPERTIES_PER_CLASS
-    syms = [_sym("BigEntity", kind="class")] + [
-        _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigEntity")
-        for i in range(_MAX_PROPERTIES_PER_CLASS + 3)
+def test_format_full_properties_omitted_when_class_has_methods() -> None:
+    """Properties are omitted when the class has public methods."""
+    syms = [
+        _sym("OrderService", kind="class"),
+        _sym("Status", kind="property", sig="public string Status", parent="OrderService"),
+        _sym("Process", kind="method", parent="OrderService"),
     ]
-    result = _format_full("src/BigEntity.cs", "new", _analysis("src/BigEntity.cs", "c_sharp", syms))
+    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    assert len(cls["properties"]) == _MAX_PROPERTIES_PER_CLASS
-    assert cls["total_properties"] == _MAX_PROPERTIES_PER_CLASS + 3
+    assert "properties" not in cls
+    assert "Process" in cls["methods"]
+
+
+def test_format_full_properties_all_inline_when_no_methods() -> None:
+    """All properties are included inline as a string when class has no methods."""
+    syms = [_sym("BigDto", kind="class")] + [
+        _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigDto")
+        for i in range(20)
+    ]
+    result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert isinstance(cls["properties"], str)
+    assert cls["properties"].count(",") == 19  # 20 props → 19 commas
+    assert "total_properties" not in cls
 
 
 def test_format_full_interface_methods_listed() -> None:
@@ -217,9 +231,9 @@ def test_format_full_private_property_excluded() -> None:
     result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    prop_names = [p.split()[-1] for p in cls.get("properties", [])]
-    assert "Name" in prop_names
-    assert "_cache" not in prop_names
+    props = cls.get("properties", "")
+    assert "Name" in props
+    assert "_cache" not in props
 
 
 def test_format_full_top_level_function_not_nested_under_class() -> None:

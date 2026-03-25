@@ -135,17 +135,15 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
             if len(all_methods) > _MAX_METHODS_PER_SYMBOL:
                 entry["total_methods"] = len(all_methods)
 
-            # Properties (capped) — classes and structs only; interfaces use methods for contracts
-            if sym.kind in ("class", "struct"):
+            # Properties — only for DTO-like classes (no methods); inline, no cap
+            if sym.kind in ("class", "struct") and not all_methods:
                 all_props = [
                     _extract_property_type_name(s.signature or s.name)
                     for s in analysis.symbols
                     if s.parent == sym.name and s.kind == "property" and _is_public(s)
                 ]
                 if all_props:
-                    entry["properties"] = all_props[:_MAX_PROPERTIES_PER_CLASS]
-                    if len(all_props) > _MAX_PROPERTIES_PER_CLASS:
-                        entry["total_properties"] = len(all_props)
+                    entry["properties"] = ", ".join(all_props)
 
             if sym.decorators:
                 entry["decorators"] = sym.decorators

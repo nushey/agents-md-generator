@@ -154,6 +154,40 @@ def test_dotnet_no_projects_key_when_no_csproj(tmp_path: Path) -> None:
     assert "dotnet_projects" not in result
 
 
+def test_dotnet_framework_style_csproj(tmp_path: Path) -> None:
+    content = """<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="MyCustomLib">
+      <HintPath>../packages/MyCustomLib.dll</HintPath>
+    </Reference>
+    <Reference Include="AnotherLib">
+      <HintPath>../packages/AnotherLib.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../OtherProject/OtherProject.csproj">
+      <Project>{abc}</Project>
+      <Name>OtherProject</Name>
+    </ProjectReference>
+  </ItemGroup>
+</Project>"""
+    _write(tmp_path / "App" / "App.csproj", content)
+    result = _detect_build_systems(tmp_path)
+    proj = result["dotnet_projects"][0]
+    assert proj["target_framework"] == "v4.8"
+    assert proj["output_type"] == "Library"
+    assert "MyCustomLib" in proj["packages"]
+    assert "AnotherLib" in proj["packages"]
+    assert "System" not in proj["packages"]
+    assert "../OtherProject/OtherProject.csproj" in proj["project_references"]
+
+
 # ── _scan_project_structure ───────────────────────────────────────────────────
 
 def test_scans_root_files(tmp_path: Path) -> None:

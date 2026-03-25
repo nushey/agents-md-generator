@@ -117,6 +117,18 @@ def _detect_build_systems(root: Path) -> dict:
             pass
 
     # Parse .csproj files (only for dotnet projects)
+    _SYSTEM_REF_PREFIXES = ("System", "Microsoft.", "mscorlib", "PresentationCore", "WindowsBase")
+
+    def _iter_tag(xml_root: ET.Element, tag: str):
+        """Iterate elements by local name, ignoring XML namespace."""
+        for el in xml_root.iter():
+            if el.tag.split("}")[-1] == tag:
+                yield el
+
+    def _find_text_tag(xml_root: ET.Element, tag: str) -> str | None:
+        el = next(_iter_tag(xml_root, tag), None)
+        return el.text.strip() if el is not None and el.text else None
+
     dotnet_projects = []
     if "dotnet" in detected:
         for csproj in sorted(root.rglob("*.csproj")):
@@ -124,24 +136,35 @@ def _detect_build_systems(root: Path) -> dict:
                 tree = ET.parse(csproj)
                 xml_root = tree.getroot()
 
-                def _find_text(tag: str) -> str | None:
-                    el = xml_root.find(f".//{tag}")
-                    return el.text.strip() if el is not None and el.text else None
-
-                target = _find_text("TargetFramework") or _find_text("TargetFrameworks")
-                output_type = _find_text("OutputType")
+                # TargetFramework (SDK-style) or TargetFrameworkVersion (Framework-style)
+                target = (
+                    _find_text_tag(xml_root, "TargetFramework")
+                    or _find_text_tag(xml_root, "TargetFrameworks")
+                    or _find_text_tag(xml_root, "TargetFrameworkVersion")
+                )
+                output_type = _find_text_tag(xml_root, "OutputType")
 
                 packages = []
-                for ref in xml_root.iter("PackageReference"):
+                # SDK-style: <PackageReference Include="Name" Version="x" />
+                for ref in _iter_tag(xml_root, "PackageReference"):
                     name = ref.get("Include") or ref.get("include")
-                    ver_el = ref.find("Version")
+                    ver_el = next(_iter_tag(ref, "Version"), None)
                     version = ref.get("Version") or ref.get("version") or (ver_el.text.strip() if ver_el is not None and ver_el.text else None)
                     if name:
                         packages.append(f"{name}@{version}" if version else name)
+
+                # Framework-style: <Reference Include="Name"> with <HintPath> (external DLL)
+                if not packages:
+                    for ref in _iter_tag(xml_root, "Reference"):
+                        name = (ref.get("Include") or "").split(",")[0].strip()
+                        has_hint = next(_iter_tag(ref, "HintPath"), None) is not None
+                        if name and has_hint and not name.startswith(_SYSTEM_REF_PREFIXES):
+                            packages.append(name)
+
                 packages = packages[:15]
 
                 proj_refs = []
-                for ref in xml_root.iter("ProjectReference"):
+                for ref in _iter_tag(xml_root, "ProjectReference"):
                     inc = ref.get("Include") or ref.get("include")
                     if inc:
                         proj_refs.append(inc.replace("\\", "/"))

@@ -74,11 +74,19 @@ def _is_minified(analysis: FileAnalysis) -> bool:
     return (short / len(public_syms)) > _MINIFIED_SHORT_NAME_THRESHOLD
 
 
+_MAX_METHODS_PER_SYMBOL = 15
+_MAX_SYMBOLS_PER_FILE = 25
+
+
 def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
     """Format a file for full_analysis — public symbols only.
 
     Returns None if the file has no public symbols worth including,
     or if the file is detected as minified/bundled.
+
+    Caps applied:
+    - Methods per class: _MAX_METHODS_PER_SYMBOL (total_methods added when truncated)
+    - Symbols per file: _MAX_SYMBOLS_PER_FILE (total_symbols added when truncated)
     """
     if _is_minified(analysis):
         return None
@@ -88,15 +96,18 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
         if not _is_public(sym):
             continue
         if sym.kind == "class":
+            all_methods = [
+                s.name for s in analysis.symbols
+                if s.parent == sym.name and s.kind == "method" and _is_public(s)
+            ]
             entry: dict = {
                 "name": sym.name,
                 "kind": sym.kind,
                 "signature": sym.signature,
-                "methods": [
-                    s.name for s in analysis.symbols
-                    if s.parent == sym.name and s.kind == "method" and _is_public(s)
-                ],
+                "methods": all_methods[:_MAX_METHODS_PER_SYMBOL],
             }
+            if len(all_methods) > _MAX_METHODS_PER_SYMBOL:
+                entry["total_methods"] = len(all_methods)
             if sym.decorators:
                 entry["decorators"] = sym.decorators
             symbols_out.append(entry)
@@ -113,11 +124,15 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     if not symbols_out:
         return None
 
-    return {
+    total = len(symbols_out)
+    result: dict = {
         "file": path,
         "language": analysis.language,
-        "symbols": symbols_out,
+        "symbols": symbols_out[:_MAX_SYMBOLS_PER_FILE],
     }
+    if total > _MAX_SYMBOLS_PER_FILE:
+        result["total_symbols"] = total
+    return result
 
 
 def _summarize_test_files(entries: list[dict]) -> list[dict]:

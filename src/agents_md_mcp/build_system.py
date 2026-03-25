@@ -2,12 +2,13 @@
 
 import json
 import tomllib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .path_utils import rel_posix
 
 _BUILD_MARKERS: dict[str, list[str]] = {
-    "dotnet": ["*.sln", "*.csproj", "global.json", "Directory.Build.props"],
+    "dotnet": ["*.sln", "**/*.csproj", "global.json", "Directory.Build.props"],
     "npm": ["package.json"],
     "go": ["go.mod"],
     "make": ["Makefile", "makefile", "GNUmakefile"],
@@ -115,8 +116,49 @@ def _detect_build_systems(root: Path) -> dict:
         except OSError:
             pass
 
+    # Parse .csproj files (only for dotnet projects)
+    dotnet_projects = []
+    if "dotnet" in detected:
+        for csproj in sorted(root.rglob("*.csproj")):
+            try:
+                tree = ET.parse(csproj)
+                xml_root = tree.getroot()
+
+                def _find_text(tag: str) -> str | None:
+                    el = xml_root.find(f".//{tag}")
+                    return el.text.strip() if el is not None and el.text else None
+
+                target = _find_text("TargetFramework") or _find_text("TargetFrameworks")
+                output_type = _find_text("OutputType")
+
+                packages = []
+                for ref in xml_root.iter("PackageReference"):
+                    name = ref.get("Include") or ref.get("include")
+                    ver_el = ref.find("Version")
+                    version = ref.get("Version") or ref.get("version") or (ver_el.text.strip() if ver_el is not None and ver_el.text else None)
+                    if name:
+                        packages.append(f"{name}@{version}" if version else name)
+                packages = packages[:15]
+
+                proj_refs = []
+                for ref in xml_root.iter("ProjectReference"):
+                    inc = ref.get("Include") or ref.get("include")
+                    if inc:
+                        proj_refs.append(inc.replace("\\", "/"))
+
+                dotnet_projects.append({
+                    "file": rel_posix(csproj, root),
+                    "target_framework": target,
+                    "output_type": output_type,
+                    "packages": packages,
+                    "project_references": proj_refs,
+                })
+            except (ET.ParseError, OSError):
+                continue
+
     return {
         "detected": detected,
         "package_files": package_files,
         "scripts": scripts,
+        **({"dotnet_projects": dotnet_projects} if dotnet_projects else {}),
     }

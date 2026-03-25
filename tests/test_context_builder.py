@@ -87,6 +87,73 @@ def test_no_build_system(tmp_path: Path) -> None:
     assert result["detected"] == []
 
 
+def _csproj(target: str = "net8.0", output_type: str | None = None, packages: list[tuple[str, str]] = [], proj_refs: list[str] = []) -> str:
+    pkg_lines = "\n".join(
+        f'    <PackageReference Include="{n}" Version="{v}" />' for n, v in packages
+    )
+    ref_lines = "\n".join(
+        f'    <ProjectReference Include="{r}" />' for r in proj_refs
+    )
+    output_el = f"  <OutputType>{output_type}</OutputType>" if output_type else ""
+    return f"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>{target}</TargetFramework>
+    {output_el}
+  </PropertyGroup>
+  <ItemGroup>
+{pkg_lines}
+{ref_lines}
+  </ItemGroup>
+</Project>"""
+
+
+def test_dotnet_parses_target_framework(tmp_path: Path) -> None:
+    _write(tmp_path / "MyApp" / "MyApp.csproj", _csproj(target="net8.0"))
+    result = _detect_build_systems(tmp_path)
+    assert "dotnet" in result["detected"]
+    projects = result.get("dotnet_projects", [])
+    assert len(projects) == 1
+    assert projects[0]["target_framework"] == "net8.0"
+
+
+def test_dotnet_parses_output_type(tmp_path: Path) -> None:
+    _write(tmp_path / "MyApi" / "MyApi.csproj", _csproj(output_type="Exe"))
+    result = _detect_build_systems(tmp_path)
+    assert result["dotnet_projects"][0]["output_type"] == "Exe"
+
+
+def test_dotnet_parses_packages(tmp_path: Path) -> None:
+    pkgs = [("MediatR", "12.0.0"), ("AutoMapper", "13.0.1")]
+    _write(tmp_path / "App" / "App.csproj", _csproj(packages=pkgs))
+    result = _detect_build_systems(tmp_path)
+    packages = result["dotnet_projects"][0]["packages"]
+    assert "MediatR@12.0.0" in packages
+    assert "AutoMapper@13.0.1" in packages
+
+
+def test_dotnet_caps_packages_at_15(tmp_path: Path) -> None:
+    pkgs = [(f"Package{i}", f"1.0.{i}") for i in range(20)]
+    _write(tmp_path / "App" / "App.csproj", _csproj(packages=pkgs))
+    result = _detect_build_systems(tmp_path)
+    assert len(result["dotnet_projects"][0]["packages"]) == 15
+
+
+def test_dotnet_parses_project_references(tmp_path: Path) -> None:
+    refs = ["../MyDomain/MyDomain.csproj", "../MyInfra/MyInfra.csproj"]
+    _write(tmp_path / "MyApi" / "MyApi.csproj", _csproj(proj_refs=refs))
+    result = _detect_build_systems(tmp_path)
+    proj_refs = result["dotnet_projects"][0]["project_references"]
+    assert "../MyDomain/MyDomain.csproj" in proj_refs
+    assert "../MyInfra/MyInfra.csproj" in proj_refs
+
+
+def test_dotnet_no_projects_key_when_no_csproj(tmp_path: Path) -> None:
+    _write(tmp_path / "MyApp.sln", "")
+    result = _detect_build_systems(tmp_path)
+    assert "dotnet" in result["detected"]
+    assert "dotnet_projects" not in result
+
+
 # ── _scan_project_structure ───────────────────────────────────────────────────
 
 def test_scans_root_files(tmp_path: Path) -> None:
@@ -119,7 +186,7 @@ def test_directory_language_detection(tmp_path: Path) -> None:
     result = _scan_project_structure(tmp_path, cfg)
     src_entry = result["directories"].get("src/")
     assert src_entry is not None
-    assert src_entry["primary_language"] == "python"
+    assert src_entry["languages"] == "python"
 
 
 # ── build_payload ─────────────────────────────────────────────────────────────

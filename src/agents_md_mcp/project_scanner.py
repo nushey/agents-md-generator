@@ -129,8 +129,16 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
                 if rel not in test_dirs:
                     test_dirs.append(rel)
 
+    # Top-level projects: directories with no nested path separator.
+    # e.g. "Zureo.Common/" is top-level; "Zureo.Common/Entities/" is not.
+    top_level_dirs = {
+        k: v for k, v in dirs_out.items()
+        if "/" not in k.rstrip("/")
+    }
+
     return {
         "root_files": root_files,
+        "top_level_dirs": top_level_dirs,
         "directories": dirs_out,
         "config_files_found": list(dict.fromkeys(config_found)),
         "ci_files_found": list(dict.fromkeys(ci_found)),

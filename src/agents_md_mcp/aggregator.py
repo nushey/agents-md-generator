@@ -31,26 +31,53 @@ def _extract_class_pattern(entries: list[dict]) -> dict | None:
         s["name"]
         for entry in entries
         for s in entry.get("symbols", [])
-        if s.get("kind") == "class"
+        if s.get("kind") in ("class", "struct", "record")
     ]
     if len(class_names) < 2:
         return None
 
     pattern: str | None = None
+    threshold = max(2, int(len(class_names) * 0.8))
+    matching_examples: list[str] = []
 
     # Check common suffix (most frequent in real codebases) — longest match first
-    for length in range(11, 2, -1):
-        suffix = class_names[0][-length:] if len(class_names[0]) >= length else None
-        if suffix and all(n.endswith(suffix) for n in class_names):
-            pattern = f"*{suffix}"
+    for length in range(12, 2, -1):
+        counts: dict[str, int] = {}
+        for name in class_names:
+            if len(name) >= length:
+                suf = name[-length:]
+                counts[suf] = counts.get(suf, 0) + 1
+        
+        # Suffix should ideally start with an uppercase letter to be a semantic unit (e.g. 'Service')
+        best_suffix = None
+        for suf, count in counts.items():
+            if count >= threshold and suf[0].isupper():
+                best_suffix = suf
+                break
+        
+        if best_suffix:
+            pattern = f"*{best_suffix}"
+            matching_examples = [n for n in class_names if n.endswith(best_suffix)]
             break
 
     # Check common prefix — longest match first
     if not pattern:
-        for length in range(11, 2, -1):
-            prefix = class_names[0][:length] if len(class_names[0]) >= length else None
-            if prefix and all(n.startswith(prefix) for n in class_names):
-                pattern = f"{prefix}*"
+        for length in range(12, 2, -1):
+            counts: dict[str, int] = {}
+            for name in class_names:
+                if len(name) >= length:
+                    pref = name[:length]
+                    counts[pref] = counts.get(pref, 0) + 1
+            
+            best_prefix = None
+            for pref, count in counts.items():
+                if count >= threshold:
+                    best_prefix = pref
+                    break
+            
+            if best_prefix:
+                pattern = f"{best_prefix}*"
+                matching_examples = [n for n in class_names if n.startswith(best_prefix)]
                 break
 
     if not pattern:
@@ -58,8 +85,8 @@ def _extract_class_pattern(entries: list[dict]) -> dict | None:
 
     return {
         "pattern": pattern,
-        "examples": class_names[:3],
-        "total": len(class_names),
+        "examples": matching_examples[:3],
+        "total": len(matching_examples),
     }
 
 

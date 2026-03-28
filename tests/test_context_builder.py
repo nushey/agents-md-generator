@@ -441,10 +441,29 @@ def test_extract_class_pattern_common_prefix() -> None:
     assert pattern["total"] == 3
 
 
+def test_extract_class_pattern_partial_match() -> None:
+    # 3 match out of 4 (75% - below 80% max threshold min 2)
+    # Wait, max(2, int(4 * 0.8)) = max(2, 3) = 3
+    # So 3 out of 4 is 75%, but threshold for 4 is 3. So it SHOULD match!
+    entries = [
+        _file_entry("a.py", "python", [_sym_dict("CreateRequest", "class")]),
+        _file_entry("b.py", "python", [_sym_dict("UpdateRequest", "class")]),
+        _file_entry("c.py", "python", [_sym_dict("DeleteRequest", "class")]),
+        _file_entry("d.py", "python", [_sym_dict("RequestWrapper", "class")]),
+    ]
+    pattern = _extract_class_pattern(entries)
+    assert pattern is not None
+    assert pattern["pattern"] == "*Request"
+    assert pattern["total"] == 3
+    assert "CreateRequest" in pattern["examples"]
+    assert "RequestWrapper" not in pattern["examples"]
+
+
 def test_extract_class_pattern_no_pattern() -> None:
     entries = [
         _file_entry("a.py", "python", [_sym_dict("Foo", "class")]),
         _file_entry("b.py", "python", [_sym_dict("Bar", "class")]),
+        _file_entry("c.py", "python", [_sym_dict("Baz", "class")]),
     ]
     pattern = _extract_class_pattern(entries)
     assert pattern is None

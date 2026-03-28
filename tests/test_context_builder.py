@@ -376,7 +376,11 @@ def test_extract_class_pattern_common_suffix() -> None:
         _file_entry("c.py", "python", [_sym_dict("PaymentService", "class")]),
     ]
     pattern = _extract_class_pattern(entries)
-    assert pattern == "*Service"
+    assert pattern is not None
+    assert pattern["pattern"] == "*Service"
+    assert pattern["total"] == 3
+    assert len(pattern["examples"]) == 3
+    assert "OrderService" in pattern["examples"]
 
 
 def test_extract_class_pattern_common_prefix() -> None:
@@ -386,7 +390,9 @@ def test_extract_class_pattern_common_prefix() -> None:
         _file_entry("c.py", "python", [_sym_dict("AbstractPayment", "class")]),
     ]
     pattern = _extract_class_pattern(entries)
-    assert pattern == "Abstract*"
+    assert pattern is not None
+    assert pattern["pattern"] == "Abstract*"
+    assert pattern["total"] == 3
 
 
 def test_extract_class_pattern_no_pattern() -> None:
@@ -469,12 +475,13 @@ def test_aggregate_dto_directory_produces_summary() -> None:
     assert summary["note"] == "DTO/entity classes — data containers with no methods"
 
 
-def test_aggregate_dto_directory_includes_class_pattern() -> None:
+def test_aggregate_dto_directory_includes_naming_pattern() -> None:
     entries = [_dto_entry(f"Entities/f{i}.cs", f"OrderDto{i}") for i in range(8)]
     result = _aggregate_by_directory(entries, threshold=8)
     summary = result[0]
-    assert "class_pattern" in summary
-    assert "Dto" in summary["class_pattern"]
+    assert "naming_pattern" in summary
+    assert "Dto" in summary["naming_pattern"]["pattern"]
+    assert summary["naming_pattern"]["total"] == 8
 
 
 def test_aggregate_dto_directory_includes_sample_files() -> None:

@@ -6,6 +6,7 @@ _COMMON_METHOD_FREQUENCY = 0.6  # method must appear in >= 60% of files to be "c
 _AGGREGATION_SAMPLE_SIZE = 3    # number of sample files to include in directory summary
 _PATTERN_COVERAGE_THRESHOLD = 0.4  # common methods must cover >= 40% of avg symbols per file
 _DTO_METHOD_RATIO_THRESHOLD = 0.8  # >= 80% of files must have zero methods to be a DTO dir
+_MAX_FILES_PER_LAYER = 5        # cap unaggregated files per directory
 
 
 def _extract_common_methods(entries: list[dict]) -> list[str]:
@@ -21,8 +22,11 @@ def _extract_common_methods(entries: list[dict]) -> list[str]:
     return sorted(name for name, count in method_counts.items() if count >= cutoff)
 
 
-def _extract_class_pattern(entries: list[dict]) -> str | None:
-    """Detect a common suffix or prefix in class names across entries (e.g. '*Service')."""
+def _extract_class_pattern(entries: list[dict]) -> dict | None:
+    """Detect a common suffix or prefix in class names and return pattern with examples.
+
+    Returns: {"pattern": "*Service", "examples": ["UserService", ...], "total": 47}
+    """
     class_names = [
         s["name"]
         for entry in entries
@@ -32,19 +36,31 @@ def _extract_class_pattern(entries: list[dict]) -> str | None:
     if len(class_names) < 2:
         return None
 
+    pattern: str | None = None
+
     # Check common suffix (most frequent in real codebases) — longest match first
     for length in range(11, 2, -1):
         suffix = class_names[0][-length:] if len(class_names[0]) >= length else None
         if suffix and all(n.endswith(suffix) for n in class_names):
-            return f"*{suffix}"
+            pattern = f"*{suffix}"
+            break
 
     # Check common prefix — longest match first
-    for length in range(11, 2, -1):
-        prefix = class_names[0][:length] if len(class_names[0]) >= length else None
-        if prefix and all(n.startswith(prefix) for n in class_names):
-            return f"{prefix}*"
+    if not pattern:
+        for length in range(11, 2, -1):
+            prefix = class_names[0][:length] if len(class_names[0]) >= length else None
+            if prefix and all(n.startswith(prefix) for n in class_names):
+                pattern = f"{prefix}*"
+                break
 
-    return None
+    if not pattern:
+        return None
+
+    return {
+        "pattern": pattern,
+        "examples": class_names[:3],
+        "total": len(class_names),
+    }
 
 
 def _is_dto_directory(entries: list[dict]) -> bool:
@@ -94,8 +110,16 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
         minority_entries = [e for lang, entries in by_lang.items() for e in entries if lang != dominant_lang]
 
         if len(dominant_entries) < threshold:
-            # Not enough files to aggregate — keep all individual
-            result.extend(dir_entries)
+            # Not enough files to aggregate — keep individual, capped
+            if len(dir_entries) > _MAX_FILES_PER_LAYER:
+                result.extend(dir_entries[:_MAX_FILES_PER_LAYER])
+                result.append({
+                    "directory": (directory + "/").replace("//", "/"),
+                    "kind": "overflow",
+                    "remaining_files": len(dir_entries) - _MAX_FILES_PER_LAYER,
+                })
+            else:
+                result.extend(dir_entries)
             continue
 
         common_methods = _extract_common_methods(dominant_entries)
@@ -119,7 +143,7 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
                 }
                 class_pattern = _extract_class_pattern(dominant_entries)
                 if class_pattern:
-                    dto_summary["class_pattern"] = class_pattern
+                    dto_summary["naming_pattern"] = class_pattern
                 result.append(dto_summary)
                 result.extend(minority_entries)
             else:
@@ -155,7 +179,7 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
             "common_methods": common_methods,
         }
         if class_pattern:
-            summary["class_pattern"] = class_pattern
+            summary["naming_pattern"] = class_pattern
         if outliers:
             summary["outliers"] = outliers[:5]  # cap at 5 to control size
         summary["sample_files"] = sample_files

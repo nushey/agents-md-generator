@@ -2,7 +2,7 @@
 
 ## Rol
 
-Es el orquestador del ensamblado del payload. No contiene lógica propia — su única responsabilidad es invocar los módulos especializados en el orden correcto y armar el dict JSON final que el servidor escribe a disco.
+Es el orquestador del ensamblado del payload. Además de invocar los módulos especializados en el orden correcto, contiene la lógica de post-procesamiento para optimizar el tamaño del payload: threshold dinámico, deduplicación de firmas de métodos, y eliminación del campo `language` por entrada.
 
 ## Por qué existe como módulo separado
 
@@ -27,8 +27,14 @@ build_payload()
     │   ├─ symbol_utils._slim_symbol()              → serialización
     │   └─ symbol_utils._format_full()              → entrada full_analysis
     │
+    ├─ _effective_threshold()                        → threshold dinámico según total de archivos
     ├─ aggregator._aggregate_by_directory()         → colapso de dirs
     ├─ symbol_utils._summarize_test_files()         → colapso de tests
+    │
+    ├─ [post-procesamiento para optimizar tamaño]
+    │   ├─ _deduplicate_methods()                   → registry de firmas repetidas
+    │   └─ _strip_language_from_file_entries()       → elimina "language" redundante
+    │
     └─ instructions._build_instructions()           → prompt embebido
 ```
 
@@ -47,7 +53,10 @@ build_payload()
   "env_vars": ["VAR_NAME", ...],
   "changes": [...],
   "full_analysis": [...],
-  "existing_agents_md": "..."
+  "existing_agents_md": "...",
+  "method_patterns": { "m0": "public void RegisterRoutes()", ... },
+  "wiring": { ... },
+  "interface_impl_map": { ... }
 }
 ```
 
@@ -64,7 +73,11 @@ Para cada `FileChange` en la lista de cambios:
 
 | Función | Qué hace |
 |---|---|
-| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Única función pública. Ensambla y retorna el payload completo como dict |
+| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Función pública principal. Ensambla y retorna el payload completo como dict |
+| `_effective_threshold(base_threshold, total_files)` | Calcula el threshold de agregación dinámico: >800 archivos → base//2 (mín 3), >400 → base-2 (mín 4) |
+| `_deduplicate_methods(entries)` | Extrae firmas de métodos que aparecen ≥3 veces en un registry `method_patterns` con claves cortas (`m0`, `m1`, ...). Modifica las entradas in-place |
+| `_strip_language_from_file_entries(entries)` | Elimina el campo `language` de entradas individuales de archivo (no de directory summaries). Ya está en `metadata.languages_detected` |
+| `_build_interface_impl_map(analyses)` | Construye un mapa interface → implementors a nivel de proyecto |
 
 Ver los módulos especializados para el detalle de cada responsabilidad:
 - [`build_system.md`](build_system.md) — detección de build tools y scripts

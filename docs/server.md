@@ -31,13 +31,23 @@ El núcleo del servidor. Ejecuta 8 pasos en orden:
 
 El payload puede tener miles de líneas para proyectos grandes. Si se enviara inline como respuesta del tool, viaja todo por el contexto del cliente de una sola vez — costoso, y puede superar límites de tamaño de respuesta MCP. En cambio, se escribe en `~/.cache/agents-md-generator/<hash>/payload.json` y el cliente lo recupera en chunks via `get_payload_chunk`.
 
+### Serialización adaptativa
+
+El payload se serializa con `json.dumps(indent=2)` por defecto (JSON legible). Pero para payloads >300kb, se usa JSON compacto (`separators=(",",":")`) que elimina ~30% de whitespace. El modo se detecta automáticamente al escribir.
+
 ### `get_payload_chunk` — streaming puro MCP
 
-Lee el payload en bloques de 500 líneas. El cliente llama al tool repetidamente con `chunk_index` empezando en 0 e incrementando hasta que `has_more` es `false`. El archivo se borra automáticamente al leer el último chunk. Este diseño es agnóstico al cliente — cualquier cliente MCP puede seguir el flujo sin necesitar acceso al filesystem.
+Lee el payload en bloques según el formato:
+- **JSON con indent** (multiline): bloques de 500 líneas (`CHUNK_LINES`)
+- **JSON compacto** (single-line): bloques de ~50kb (`CHUNK_BYTES`)
+
+La detección del modo es automática: si el payload tiene <5 líneas, se usa byte-based chunking.
+
+El cliente llama al tool repetidamente con `chunk_index` empezando en 0 e incrementando hasta que `has_more` es `false`. El archivo se borra automáticamente al leer el último chunk. Este diseño es agnóstico al cliente — cualquier cliente MCP puede seguir el flujo sin necesitar acceso al filesystem.
 
 ### `_build_response`
 
-Calcula cuántos chunks necesita el cliente para recuperar el payload (basado en 500 líneas por chunk) y construye instrucciones paso a paso que el cliente debe seguir exactamente:
+Recibe el número de chunks pre-calculado y construye instrucciones paso a paso que el cliente debe seguir exactamente:
 
 ```
 STEP 1 → Llamar get_payload_chunk repetidamente hasta has_more = false
@@ -57,7 +67,8 @@ Si `detect_changes` devuelve lista vacía, el server retorna un JSON especial co
 | Función | Qué hace |
 |---|---|
 | `generate_agents_md(params)` | Entry point del tool MCP. Valida el path y delega a `_run_pipeline` |
-| `get_payload_chunk(params)` | Lee un chunk de 500 líneas del payload. Borra el archivo al leer el último chunk |
-| `_run_pipeline(project_path, force_full_scan)` | Ejecuta los 8 pasos del pipeline de análisis |
-| `_build_response(payload_path, payload_lines, agents_md_path, project_path)` | Construye la respuesta pequeña con instrucciones para el cliente |
+| `get_payload_chunk(params)` | Lee un chunk del payload (line-based o byte-based según formato). Borra el archivo al leer el último chunk |
+| `_run_pipeline(project_path, force_full_scan)` | Ejecuta los 8 pasos del pipeline de análisis. Usa JSON compacto para payloads >300kb |
+| `_compute_total_chunks(payload_text, compact)` | Calcula total de chunks: por líneas (`CHUNK_LINES=500`) para pretty JSON, por bytes (`CHUNK_BYTES=50kb`) para compacto |
+| `_build_response(payload_path, num_chunks, agents_md_path, project_path)` | Construye la respuesta pequeña con instrucciones para el cliente |
 | `main()` | Entry point del proceso — llama `mcp.run()` |

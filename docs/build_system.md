@@ -46,6 +46,8 @@ Cada sistema tiene su propia lógica de extracción:
 
 El campo `dotnet_projects` se omite del output si no hay `.csproj` en el proyecto. La detección usa `**/*.csproj` para encontrar proyectos en subdirectorios.
 
+**Deduplicación de paquetes comunes**: cuando hay más de un `.csproj`, se cuentan las ocurrencias de cada paquete. Los que aparecen en >50% de los proyectos se extraen a una lista `dotnet_common_packages` en el output, y se eliminan de la lista `packages` de cada proyecto individual. Esto evita repetir los mismos paquetes 58 veces en proyectos grandes.
+
 ### Extensibilidad (OCP implícito)
 
 Para agregar soporte a un nuevo sistema de build, basta con:

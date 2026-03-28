@@ -34,6 +34,7 @@ Define qué ES y qué NO ES AGENTS.md. Es un "README para agentes de IA" que res
 
 Instrucciones específicas por campo del payload:
 - `full_analysis`: sintetizar patrones, no listar archivos ni símbolos
+- `method_patterns`: tabla de lookup para firmas de métodos deduplicadas — cuando un método en `full_analysis` es una clave corta como `"m0"`, resolver via esta tabla
 - `project_structure.directories`: describir qué hace cada capa, no listar paths
 - `build_system.scripts`: copiar verbatim en bloques de código
 

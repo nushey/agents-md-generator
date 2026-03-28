@@ -188,6 +188,52 @@ def test_dotnet_framework_style_csproj(tmp_path: Path) -> None:
     assert "../OtherProject/OtherProject.csproj" in proj["project_references"]
 
 
+# ── Go packages ──────────────────────────────────────────────────────────────
+
+def test_go_extracts_direct_deps(tmp_path: Path) -> None:
+    _write(tmp_path / "go.mod", """\
+module github.com/myorg/myapp
+
+go 1.22
+
+require (
+\tgithub.com/gin-gonic/gin v1.9.1
+\tgithub.com/jmoiron/sqlx v1.3.5
+\tgolang.org/x/sync v0.6.0 // indirect
+)
+""")
+    result = _detect_build_systems(tmp_path)
+    assert "go" in result["detected"]
+    pkgs = result["go_packages"]
+    assert "github.com/gin-gonic/gin" in pkgs
+    assert "github.com/jmoiron/sqlx" in pkgs
+    # indirect deps should be excluded
+    assert "golang.org/x/sync" not in pkgs
+
+
+def test_go_single_line_require(tmp_path: Path) -> None:
+    _write(tmp_path / "go.mod", """\
+module example.com/app
+
+go 1.21
+
+require github.com/stretchr/testify v1.8.4
+""")
+    result = _detect_build_systems(tmp_path)
+    assert "github.com/stretchr/testify" in result["go_packages"]
+
+
+def test_go_no_deps_no_key(tmp_path: Path) -> None:
+    _write(tmp_path / "go.mod", """\
+module example.com/app
+
+go 1.21
+""")
+    result = _detect_build_systems(tmp_path)
+    assert "go" in result["detected"]
+    assert "go_packages" not in result
+
+
 # ── _scan_project_structure ───────────────────────────────────────────────────
 
 def test_scans_root_files(tmp_path: Path) -> None:

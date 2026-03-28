@@ -129,6 +129,36 @@ def _detect_build_systems(root: Path) -> dict:
         except OSError:
             pass
 
+    # Parse go.mod — extract direct dependency module paths (no versions)
+    go_mod = root / "go.mod"
+    if go_mod.exists():
+        try:
+            go_packages = []
+            in_require_block = False
+            for line in go_mod.read_text(encoding="utf-8", errors="replace").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("require ("):
+                    in_require_block = True
+                    continue
+                if in_require_block:
+                    if stripped == ")":
+                        in_require_block = False
+                        continue
+                    if stripped and not stripped.startswith("//"):
+                        # "github.com/foo/bar v1.2.3" or "github.com/foo/bar v1.2.3 // indirect"
+                        parts = stripped.split()
+                        if parts and "// indirect" not in stripped:
+                            go_packages.append(parts[0])
+                elif stripped.startswith("require ") and "(" not in stripped:
+                    # Single-line require: "require github.com/foo/bar v1.2.3"
+                    parts = stripped.split()
+                    if len(parts) >= 2 and "// indirect" not in stripped:
+                        go_packages.append(parts[1])
+            if go_packages:
+                detected_extras["go_packages"] = sorted(go_packages)
+        except OSError:
+            pass
+
     # Parse .csproj files (only for dotnet projects)
     _SYSTEM_REF_PREFIXES = ("System", "Microsoft.", "mscorlib", "PresentationCore", "WindowsBase")
 

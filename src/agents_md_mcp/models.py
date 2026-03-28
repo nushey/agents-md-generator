@@ -65,7 +65,6 @@ class CachedSymbol(BaseModel):
     visibility: Optional[str] = None
     signature: Optional[str] = None
     decorators: list[str] = Field(default_factory=list)
-    implements: list[str] = Field(default_factory=list)
 
 
 class CachedFile(BaseModel):

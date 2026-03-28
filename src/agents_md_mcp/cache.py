@@ -45,7 +45,7 @@ def save_cache(project_path: str | Path, data: CacheData) -> None:
     cache_path = get_project_cache_dir(project_path) / CACHE_FILENAME
     try:
         cache_path.write_text(
-            data.model_dump_json(indent=2),
+            data.model_dump_json(indent=2, exclude_defaults=True),
             encoding="utf-8",
         )
         logger.debug("Cache saved to %s", cache_path)

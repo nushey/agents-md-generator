@@ -69,6 +69,38 @@ def test_python_imports() -> None:
     assert any("Optional" in imp for imp in result.imports)
 
 
+def test_python_implements_extracted() -> None:
+    """Class with base classes populates the implements field."""
+    src = (FIXTURES / "sample.py").read_bytes()
+    result = PythonAnalyzer().analyze(Path("sample.py"), src)
+
+    user_svc = _by_name(result, "UserService")
+    assert "IRepository" in user_svc.implements
+    assert "ABC" in user_svc.implements
+
+
+def test_python_class_without_bases_has_empty_implements() -> None:
+    src = (FIXTURES / "sample.py").read_bytes()
+    result = PythonAnalyzer().analyze(Path("sample.py"), src)
+
+    simple = _by_name(result, "SimpleModel")
+    assert simple.implements == []
+
+
+def test_python_decorators_include_arguments() -> None:
+    """Decorators preserve full text including arguments."""
+    src = b"""
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def expensive(x: int) -> int:
+    return x * 2
+"""
+    result = PythonAnalyzer().analyze(Path("test.py"), src)
+    fn = _by_name(result, "expensive")
+    assert any("lru_cache(maxsize=128)" in d for d in fn.decorators)
+
+
 # ── C# ────────────────────────────────────────────────────────────────────────
 
 def test_csharp_classes_and_interface() -> None:

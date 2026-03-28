@@ -20,16 +20,32 @@ def _get_child_by_field(node: Node, field: str) -> Node | None:
 
 
 def _get_decorators(node: Node, source: bytes) -> list[str]:
-    """Collect decorator names from a decorated_definition or function/class node."""
+    """Collect decorators with full arguments.
+
+    Preserves: "app.route('/users')", "router.get('/items/{id}')", "staticmethod"
+    """
     decorators = []
     parent = node.parent
     if parent and parent.type == "decorated_definition":
         for child in parent.children:
             if child.type == "decorator":
-                # decorator text e.g. "@app.route" → strip leading @
-                text = _node_text(child, source).lstrip("@").split("(")[0].strip()
+                text = _node_text(child, source).lstrip("@").strip()
                 decorators.append(text)
     return decorators
+
+
+def _extract_implements(node: Node, source: bytes) -> list[str]:
+    """Extract base classes from class_definition → superclasses field."""
+    bases_node = node.child_by_field_name("superclasses")
+    if not bases_node:
+        return []
+    result = []
+    for child in bases_node.children:
+        if child.type in ("identifier", "subscript", "attribute", "call"):
+            name = _node_text(child, source).strip()
+            if name:
+                result.append(name)
+    return result
 
 
 def _build_signature(node: Node, source: bytes, kind: str) -> str:
@@ -107,6 +123,7 @@ class PythonAnalyzer(LanguageAnalyzer):
                     visibility=_infer_visibility(name),
                     signature=_build_signature(node, source, "class"),
                     decorators=_get_decorators(node, source),
+                    implements=_extract_implements(node, source),
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,
                     line_end=node.end_point[0] + 1,

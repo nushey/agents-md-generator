@@ -13,6 +13,8 @@
 - `tests/` — Pytest unit and integration test suite covering the full pipeline.
 - `tests/fixtures/` — Sample source files (`.py`, `.ts`, `.go`, `.cs`) used as AST parsing targets in tests.
 - `docs/` — Project documentation and design notes.
+- `openspec/` — OpenSpec specification and changelog files for the project's design decisions.
+- `.claude/` — Claude Code configuration (settings, hooks).
 
 ### Data flow
 
@@ -24,9 +26,13 @@ change_detector  →  ast_analyzer  →  context_builder  →  server (MCP tools
 
 1. `change_detector.detect_changes` compares the current git state against the cache to produce a list of `FileChange` objects.
 2. `ast_analyzer.analyze_changes` dispatches each changed file to the appropriate `LanguageAnalyzer`, returning a `dict[str, FileAnalysis]`.
-3. `context_builder.build_payload` merges new analyses with cached data into a structured JSON payload saved to `.agents-payload.json`.
-4. `server.generate_agents_md` (MCP tool) orchestrates the above and returns instructions to Claude.
-5. Claude calls `server.get_payload_chunk` repeatedly to retrieve the payload, then writes `AGENTS.md`.
+3. `context_builder.build_payload` merges new analyses with cached data into a structured JSON payload:
+   - Filters out generated files (`_is_generated`) and trivial entries (no methods/deps/implements/decorators)
+   - Aggregates directories above a dynamic threshold into directory summaries
+   - Deduplicates repeated method signatures into a `method_patterns` lookup registry
+   - Strips per-entry `language` field (already in metadata) and noise decorators
+4. `server.generate_agents_md` (MCP tool) orchestrates the above, serializes to compact JSON for large payloads (>300kb), and returns instructions to Claude.
+5. Claude calls `server.get_payload_chunk` repeatedly (line-based chunking for pretty JSON, byte-based for compact) to retrieve the payload, then writes `AGENTS.md`.
 
 ## Conventions & Patterns
 
@@ -50,6 +56,16 @@ The two public MCP tools live exclusively in `src/agents_md_mcp/server.py` and a
 ### Cache
 
 Cache I/O is fully encapsulated in `src/agents_md_mcp/cache.py`. All other modules receive `CacheData | None` — they never read/write the cache file directly.
+
+### Payload size management
+
+The payload must stay under ~300kb to fit in LLM context windows. Size is controlled at multiple layers:
+
+- **`symbol_utils.py`**: Per-file caps (`_MAX_METHODS_PER_SYMBOL=10`, `_MAX_SYMBOLS_PER_FILE=10`), generated file detection (`_is_generated`), trivial entry stripping, noise decorator filtering (`_filter_decorators`).
+- **`aggregator.py`**: Directory-level collapsing when files exceed the aggregation threshold, DTO directory detection, outlier capping.
+- **`context_builder.py`**: Dynamic aggregation threshold (`_effective_threshold` — auto-lowers for projects >400 files), method signature deduplication (`_deduplicate_methods`), per-entry language stripping.
+- **`build_system.py`**: Common dotnet package deduplication across `.csproj` files.
+- **`server.py`**: Compact JSON serialization (no indent, minimal separators) for payloads >300kb, with byte-based chunking (`CHUNK_BYTES=50kb`).
 
 ## Environment Variables
 

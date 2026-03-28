@@ -29,15 +29,22 @@ Ejemplos:
 - `AbstractOrder`, `AbstractUser`, `AbstractPayment` → `Abstract*`
 - `Foo`, `Bar`, `Baz` → `None` (sin patrón)
 
-## Thresholds configurables
+## Casos especiales
 
-| Constante | Valor | Descripción |
-|---|---|---|
-| `_COMMON_METHOD_FREQUENCY` | 0.6 | Un método debe aparecer en ≥ 60% de los archivos para ser "común" |
-| `_PATTERN_COVERAGE_THRESHOLD` | 0.4 | Los métodos comunes deben cubrir ≥ 40% de los símbolos promedio por archivo |
-| `_AGGREGATION_SAMPLE_SIZE` | 3 | Número de archivos de muestra en el summary (primero, medio, último) |
+### Directorios de DTOs (Minificados)
 
-El threshold de cantidad de archivos es configurable por proyecto via `dir_aggregation_threshold` en `.agents-config.json` (default: 8).
+Si todos los archivos de un directorio fueron minificados como `dto_container` por `symbol_utils._is_low_entropy`, el agregador genera un resumen semántico:
+```json
+{
+  "directory": "Contracts/Requests/",
+  "kind": "directory_summary",
+  "file_count": 25,
+  "language": "c_sharp",
+  "note": "Contains 25 DTO/Entity classes with no logic methods",
+  "sample_files": [...]
+}
+```
+Esto permite colapsar capas enteras de datos en una sola línea de señal.
 
 ## Funciones
 

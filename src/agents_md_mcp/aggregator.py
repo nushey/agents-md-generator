@@ -151,8 +151,23 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
 
         common_methods = _extract_common_methods(dominant_entries)
 
-        avg_symbols = sum(len(e.get("symbols", [])) for e in dominant_entries) / len(dominant_entries)
+        avg_symbols = sum(len(e.get("symbols", [])) for e in dominant_entries if "symbols" in e) / len(dominant_entries)
         coverage = len(common_methods) / avg_symbols if avg_symbols > 0 else 0
+
+        # Special Case: Directory of DTO Containers (Minified)
+        if all(e.get("kind") == "dto_container" for e in dominant_entries):
+            n = len(dominant_entries)
+            indices = sorted({0, n // 2, n - 1})
+            result.append({
+                "directory": (directory + "/").replace("//", "/"),
+                "kind": "directory_summary",
+                "file_count": n,
+                "language": dominant_lang,
+                "note": f"Contains {n} DTO/Entity classes with no logic methods",
+                "sample_files": [dominant_entries[i]["file"] for i in indices],
+            })
+            result.extend(minority_entries)
+            continue
 
         if len(common_methods) < 2 or coverage < _PATTERN_COVERAGE_THRESHOLD:
             # No shared method pattern — check for DTO/entity directory before giving up

@@ -12,10 +12,10 @@ Produce un mapa de la organización del proyecto:
 
 - **`root_files`**: archivos visibles en la raíz (hasta 30, sin dotfiles)
 - **`top_level_dirs`**: subconjunto de `directories` con solo los directorios inmediatos a la raíz (sin `/` en el key)
-- **`directories`**: por cada directorio (hasta profundidad 3), `file_count` y `languages` (lista de lenguajes detectados por extensión, en texto plano ordenado: `"css, html, javascript"`). Directorios más profundos se agregan al ancestro de profundidad 3 acumulando su `file_count`
-- **`config_files_found`**: archivos de configuración de herramientas presentes (`tsconfig.json`, `.eslintrc*`, `pyproject.toml`, `mypy.ini`, etc.)
-- **`ci_files_found`**: archivos de CI detectados (`.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, etc.)
-- **`test_directories`**: directorios de test detectados por nombre (`tests/`, `spec/`, `__tests__/`, `*.Tests/`, etc.)
+- **`directories`**: por cada directorio (hasta profundidad 3), `file_count` y `languages` (lista de lenguajes detectados por extensión). Si el directorio es reconocido como boilerplate (e.g., `Migrations`, `bin`, `obj`), se marca con `"kind": "boilerplate"`.
+- **`config_files_found`**: archivos de configuración de herramientas presentes.
+- **`ci_files_found`**: archivos de CI detectados.
+- **`test_directories`**: directorios de test detectados por nombre.
 
 Todos los archivos pasan por gitignore + exclusiones de config antes de ser contados.
 

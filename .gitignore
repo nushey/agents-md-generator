@@ -13,8 +13,13 @@ build/
 
 # Secrets
 .env
+.mcpregistry_github_token
+.mcpregistry_registry_token
 
 # Editor
 .idea/
 .vscode/
 *.swp
+.gga/
+uv.lock
+mcp-publisher

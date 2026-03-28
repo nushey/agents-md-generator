@@ -115,7 +115,7 @@ El resultado es `{ path → FileAnalysis }` con todos los símbolos públicos + 
 
 Cuatro módulos especializados hacen análisis estático del filesystem en paralelo conceptual:
 
-- **`project_scanner._scan_project_structure`**: lista directorios, cuenta archivos, detecta el lenguaje dominante por directorio. También detecta config files (`.eslintrc`, `tsconfig.json`, etc.) y archivos de CI.
+- **`project_scanner._scan_project_structure`**: lista directorios, cuenta archivos, detecta el lenguaje dominante por directorio. Detecta y marca directorios de boilerplate (e.g., `Migrations`, `bin`, `obj`) con `"kind": "boilerplate"`. También detecta config files (`.eslintrc`, `tsconfig.json`, etc.) y archivos de CI.
 - **`build_system._detect_build_systems`**: busca `package.json`, `pyproject.toml`, `go.mod`, `Makefile`, etc. Para cada uno extrae los scripts ejecutables.
 - **`project_scanner._detect_env_vars`**: escanea código fuente con regex por lenguaje y archivos `.env.example`.
 - **`project_scanner._detect_entry_points`**: busca archivos cuyo stem es `main`, `index`, `app`, `server`, etc., e infiere su rol.
@@ -125,33 +125,33 @@ Cuatro módulos especializados hacen análisis estático del filesystem en paral
 Para cada `FileChange`:
 
 - **`"deleted"`**: se agrega al `changes_payload` con `impact="high"`
-- **`"new"`**: se formatea con todos sus símbolos públicos en `full_analysis_payload`
+- **`"new"`**: se formatea con sus símbolos públicos. Si el archivo es detectado como de "baja entropía" (e.g., DTOs/Entidades sin lógica), se devuelve un resumen minificado (`kind: "dto_container"`) en lugar de listar todos sus símbolos.
 - **`"modified"` con historial en cache**: se computa diff semántico, se clasifica cada cambio con `classify_impact`, se filtra por threshold. Si nada supera el threshold → el archivo se omite del payload
 - **`"modified"` sin historial**: se trata como `"new"`
 
 ### Agregación de directorios
 
-Los archivos de producción pasan por `aggregator._aggregate_by_directory`. Directorios con ≥ N archivos del mismo lenguaje que comparten métodos comunes se colapsan en un único `directory_summary` con `common_methods`, `class_pattern` y `sample_files`. Esto reduce drásticamente el tamaño del payload en proyectos grandes.
-
-Los archivos de test se colapsan por separado en `test_directory_summary` vía `symbol_utils._summarize_test_files`.
+Los archivos de producción pasan por `aggregator._aggregate_by_directory`.
+- Directorios con ≥ N archivos del mismo lenguaje que comparten métodos comunes se colapsan en un `directory_summary`.
+- Directorios compuestos íntegramente por resúmenes minificados de DTOs se colapsan en un resumen semántico que indica la cantidad de clases de datos detectadas.
 
 ### El payload final
 
 ```json
 {
   "metadata": {...},
+  "instructions": "...",
   "project_structure": {...},
   "build_system": {...},
   "entry_points": [...],
   "env_vars": [...],
   "changes": [...],
   "full_analysis": [...],
-  "existing_agents_md": "...",
-  "instructions": "..."
+  "existing_agents_md": "..."
 }
 ```
 
-El campo `instructions` (generado por `instructions._build_instructions`) es el prompt que guía al cliente en cómo usar cada campo y qué escribir en cada sección de AGENTS.md.
+El campo `instructions` (generado por `instructions._build_instructions`) ahora se ubica al inicio del payload para establecer las reglas fundamentales antes de que el modelo procese el resto del contexto.
 
 ---
 

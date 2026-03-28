@@ -198,6 +198,7 @@ def build_payload(
             "project_name": project_name,
             "languages_detected": list({a.language for a in new_analyses.values()}),
         },
+        "instructions": _build_instructions(existing_agents_md is not None),
         "project_structure": structure,
         "build_system": build_system,
         "entry_points": entry_points,
@@ -205,7 +206,6 @@ def build_payload(
         "changes": changes_payload,
         "full_analysis": full_analysis_payload,
         "existing_agents_md": existing_agents_md,
-        "instructions": _build_instructions(existing_agents_md is not None),
     }
     if wiring:
         payload["wiring"] = wiring

@@ -31,18 +31,31 @@ Antes de formatear, se verifica si el archivo es minificado o bundleado. La heur
 
 Solo aplica a JS/TS — en C# o Python los nombres cortos son convenciones válidas. Requiere al menos 5 símbolos para evitar falsos positivos en archivos pequeños.
 
+### Detección de archivos de baja entropía (`_is_low_entropy`)
+
+Identifica archivos que contienen exclusivamente estructuras de datos (DTOs, Entidades) sin lógica. La heurística:
+- El archivo tiene al menos 3 clases/structs públicos.
+- El 100% de las clases/structs tienen cero métodos públicos.
+
+Si un archivo cumple esto, se devuelve un resumen minificado en `full_analysis` en lugar de listar cada símbolo individualmente.
+
 ### Formateo para el payload
 
-**`_slim_symbol`**: reduce un símbolo a los campos que el modelo necesita para AGENTS.md:
-- `name`, `kind`, `visibility`, `signature`
-- `decorators` — solo incluido cuando no está vacío
-- Omite `line_start`, `line_end`, `parent` — útiles para análisis interno pero ruido para el output
+**`_slim_symbol`**: reduce un símbolo a los campos que el modelo necesita para AGENTS.md.
 
-**`_format_full`**: formatea un archivo completo para `full_analysis`. Retorna `None` (el caller lo filtra) en dos casos:
-- El archivo tiene cero símbolos públicos
-- El archivo es detectado como minificado por `_is_minified`
+**`_format_full`**: formatea un archivo completo para `full_analysis`. Retorna `None` si el archivo no tiene símbolos útiles o es minificado por `_is_minified`.
 
-Para clases, incluye la lista de métodos públicos directos. Para funciones/símbolos de top level, incluye solo los que no tienen `parent`. El campo `decorators` se omite cuando está vacío.
+**Resumen Minificado (DTOs)**: si un archivo es detectado como `low_entropy`, se genera una entrada especial:
+```json
+{
+  "file": "path/to/dto.cs",
+  "language": "c_sharp",
+  "kind": "dto_container",
+  "is_dto": true,
+  "symbols_count": 5
+}
+```
+Esto reduce drásticamente el tamaño del payload en capas de datos/contratos.
 
 ### Resumen de tests (`_summarize_test_files`)
 

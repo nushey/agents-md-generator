@@ -40,14 +40,14 @@ build_payload()
     "project_name": "...",
     "languages_detected": [...]
   },
+  "instructions": "...",
   "project_structure": { "directories": {...}, "config_files_found": [...], ... },
   "build_system": { "detected": [...], "scripts": {...} },
   "entry_points": [{ "file": "...", "role": "..." }],
   "env_vars": ["VAR_NAME", ...],
   "changes": [...],
   "full_analysis": [...],
-  "existing_agents_md": "...",
-  "instructions": "..."
+  "existing_agents_md": "..."
 }
 ```
 

@@ -238,6 +238,15 @@ Files named `index`, `main`, `app`, `server`, `program`, `bootstrap`, or `startu
 
 Tree-sitter parses each source file and extracts public symbols — classes, functions, methods, interfaces — filtering out private/protected members and underscore-prefixed symbols. For classes and structs, constructors (when they have parameters) and public properties are also included, revealing dependency injection patterns and data shapes. Interface methods are always included as they define the public contract. These are used to detect naming conventions, DI patterns, and export contracts across layers.
 
+### Architectural Distillation
+
+For large codebases, the tool applies several heuristics to ensure the payload remains high-signal:
+
+- **Boilerplate Suppression:** Common directories like `Migrations`, `bin`, `obj`, and `Properties` are automatically flagged and collapsed in the project structure, preventing them from bloating the directory listing.
+- **Low-Entropy Summarization:** Files that primarily contain data structures (DTOs, Entities) with no logic methods are "minified". Instead of listing every property, the tool provides a high-level summary (e.g., "Contains 25 DTO classes").
+- **Semantic Clustering:** The aggregator groups these minified summaries at the directory level, allowing the consuming AI to understand entire data layers through a single line of signal.
+- **Instruction Prioritization:** Foundation mandates (instructions) are placed at the very top of the payload, ensuring the AI agent understands the project's "Rules of Engagement" before processing the code architecture.
+
 ---
 
 ## Credits

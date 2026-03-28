@@ -74,6 +74,32 @@ def _is_minified(analysis: FileAnalysis) -> bool:
     return (short / len(public_syms)) > _MINIFIED_SHORT_NAME_THRESHOLD
 
 
+def _is_low_entropy(analysis: FileAnalysis) -> bool:
+    """Return True if the file contains primarily low-logic symbols (DTOs/Entities).
+
+    Heuristic: 100% of symbols are classes or structs with zero public methods.
+    Only applied if there are >= 3 such containers, to avoid minifying 
+    small logic files that might just be starting out.
+    """
+    public_syms = [s for s in analysis.symbols if _is_public(s)]
+    if not public_syms:
+        return False
+
+    containers = [s for s in public_syms if s.kind in _MEMBER_CONTAINER_KINDS]
+    if not containers or len(containers) < 3:
+        return False
+
+    for container in containers:
+        methods = [
+            s for s in public_syms
+            if s.parent == container.name and s.kind == "method"
+        ]
+        if methods:
+            return False
+
+    return True
+
+
 _MAX_METHODS_PER_SYMBOL = 10
 _MAX_SYMBOLS_PER_FILE = 10
 
@@ -132,6 +158,19 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     """
     if _is_minified(analysis):
         return None
+
+    if _is_low_entropy(analysis):
+        # Minify DTO-only files
+        containers = [s for s in analysis.symbols if _is_public(s) and s.kind in _MEMBER_CONTAINER_KINDS]
+        if not containers:
+            return None
+        return {
+            "file": path,
+            "language": analysis.language,
+            "kind": "dto_container",
+            "is_dto": True,
+            "symbols_count": len(containers),
+        }
 
     symbols_out = []
     for sym in analysis.symbols:

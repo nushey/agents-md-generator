@@ -54,6 +54,11 @@ _TEST_DIR_PATTERNS = [
     "*.Tests", "*.Test", "*.Specs",
 ]
 
+_BOILERPLATE_DIR_NAMES = {
+    "Migrations", "Properties", "bin", "obj", "dist", "out", "target", "vendor",
+    "node_modules", ".idea", ".vscode", ".pytest_cache", "__pycache__"
+}
+
 
 def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     """Scan directories and root files (no AST, pure filesystem)."""
@@ -93,10 +98,14 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
 
     dirs_out: dict[str, dict] = {}
     for d, info in dir_summary.items():
-        dirs_out[d + "/"] = {
+        rel_path = d + "/"
+        entry = {
             "file_count": info["file_count"],
             "languages": ", ".join(sorted(info["languages"])) or None,
         }
+        if any(part in _BOILERPLATE_DIR_NAMES for part in d.split("/")):
+            entry["kind"] = "boilerplate"
+        dirs_out[rel_path] = entry
 
     # Config files present at root
     config_found = []

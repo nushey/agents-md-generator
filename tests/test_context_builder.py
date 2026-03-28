@@ -9,7 +9,7 @@ from agents_md_mcp.cache import make_empty_cache
 from agents_md_mcp.config import load_config
 from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern, _is_dto_directory
 from agents_md_mcp.build_system import _detect_build_systems
-from agents_md_mcp.context_builder import build_payload
+from agents_md_mcp.context_builder import build_payload, _build_interface_impl_map
 from agents_md_mcp.project_scanner import _detect_wiring, _cap_routes, _scan_project_structure
 from agents_md_mcp.symbol_utils import _passes_threshold
 from agents_md_mcp.models import CachedFile, FileAnalysis, FileChange, SymbolInfo
@@ -718,3 +718,58 @@ def test_wiring_caps_routes_per_controller() -> None:
     # All method types should be represented
     methods = {r["method"] for r in entry["routes"]}
     assert len(methods) == 5
+
+
+# ── _build_interface_impl_map ────────────────────────────────────────────────
+
+def test_interface_impl_map_basic() -> None:
+    """Interfaces with known implementors produce a map."""
+    analyses = {
+        "ifaces.ts": FileAnalysis(path="ifaces.ts", language="typescript", symbols=[
+            SymbolInfo(name="IUserService", kind="interface"),
+            SymbolInfo(name="Serializable", kind="interface"),
+        ]),
+        "impl.ts": FileAnalysis(path="impl.ts", language="typescript", symbols=[
+            SymbolInfo(name="UserService", kind="class", implements=["IUserService", "Serializable"]),
+            SymbolInfo(name="AdminService", kind="class", implements=["IUserService"]),
+        ]),
+    }
+    result = _build_interface_impl_map(analyses)
+    assert "IUserService" in result
+    assert "UserService" in result["IUserService"]
+    assert "AdminService" in result["IUserService"]
+    assert "UserService" in result["Serializable"]
+
+
+def test_interface_impl_map_ignores_unknown_interfaces() -> None:
+    """Classes implementing interfaces not in the project are excluded."""
+    analyses = {
+        "impl.ts": FileAnalysis(path="impl.ts", language="typescript", symbols=[
+            SymbolInfo(name="MyClass", kind="class", implements=["ExternalInterface"]),
+        ]),
+    }
+    result = _build_interface_impl_map(analyses)
+    assert result == {}
+
+
+def test_interface_impl_map_go_convention() -> None:
+    """Go I{Name} convention matches to {Name} struct."""
+    analyses = {
+        "repo.go": FileAnalysis(path="repo.go", language="go", symbols=[
+            SymbolInfo(name="IOrderRepo", kind="interface"),
+            SymbolInfo(name="OrderRepo", kind="struct"),
+        ]),
+    }
+    result = _build_interface_impl_map(analyses)
+    assert "IOrderRepo" in result
+    assert "OrderRepo" in result["IOrderRepo"]
+
+
+def test_interface_impl_map_empty_when_no_interfaces() -> None:
+    analyses = {
+        "svc.ts": FileAnalysis(path="svc.ts", language="typescript", symbols=[
+            SymbolInfo(name="UserService", kind="class"),
+        ]),
+    }
+    result = _build_interface_impl_map(analyses)
+    assert result == {}

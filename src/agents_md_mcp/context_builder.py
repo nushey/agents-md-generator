@@ -24,6 +24,41 @@ from .symbol_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _build_interface_impl_map(analyses: dict[str, FileAnalysis]) -> dict[str, list[str]]:
+    """Build a project-wide interface → implementors map.
+
+    Sources:
+    - SymbolInfo.implements (populated by language analyzers)
+    - Go convention fallback: I{Name} interface → {Name} struct
+    """
+    all_interfaces: set[str] = set()
+    for analysis in analyses.values():
+        for sym in analysis.symbols:
+            if sym.kind == "interface":
+                all_interfaces.add(sym.name)
+
+    impl_map: dict[str, list[str]] = {}
+    for analysis in analyses.values():
+        for sym in analysis.symbols:
+            if sym.kind in ("class", "struct") and sym.implements:
+                for iface in sym.implements:
+                    if iface in all_interfaces:
+                        impl_map.setdefault(iface, []).append(sym.name)
+
+    # Go convention fallback: I{Name} → {Name}
+    for analysis in analyses.values():
+        if analysis.language != "go":
+            continue
+        struct_names = {s.name for s in analysis.symbols if s.kind == "struct"}
+        for iface in all_interfaces:
+            if iface.startswith("I") and iface[1:] in struct_names:
+                impl = iface[1:]
+                if impl not in impl_map.get(iface, []):
+                    impl_map.setdefault(iface, []).append(impl)
+
+    return impl_map
+
+
 def build_payload(
     project_path: str | Path,
     config: ProjectConfig,
@@ -156,6 +191,7 @@ def build_payload(
     env_vars = _detect_env_vars(root, config)
     entry_points = _detect_entry_points(root, config)
     wiring = _detect_wiring(new_analyses)
+    interface_impl_map = _build_interface_impl_map(new_analyses)
 
     payload: dict = {
         "metadata": {
@@ -173,4 +209,6 @@ def build_payload(
     }
     if wiring:
         payload["wiring"] = wiring
+    if interface_impl_map:
+        payload["interface_impl_map"] = interface_impl_map
     return payload

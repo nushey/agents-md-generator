@@ -65,7 +65,7 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
     ][:30]
 
     # Directory summary: file count + languages (capped at depth 3)
-    _MAX_DIR_DEPTH = 3
+    _MAX_DIR_DEPTH = 2
     dir_summary: dict[str, dict] = {}
     try:
         for item in root.rglob("*"):

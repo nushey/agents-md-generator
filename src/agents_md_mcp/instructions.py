@@ -44,12 +44,19 @@ TASK: {action} AGENTS.md file at the project root.
    - metadata → project name, detected languages (language applies to ALL file entries)
    - project_structure.top_level_dirs → top-level projects/packages (module inventory source)
    - project_structure.directories → all directories (use to infer layer structure)
-   - build_system → detected tools, package files, parsed scripts
+   - build_system → detected tools, package files, parsed scripts, AND packages
+     (dependency lists per package manager — use to identify specific frameworks,
+     ORMs, and key libraries for Tech Stack)
    - entry_points → bootstrap/main files per package with their role
    - env_vars → environment variables referenced in source or .env.example files
-   - full_analysis → public symbols, constructors, properties per file (infer patterns from these)
+   - full_analysis → public symbols, constructors, methods per file (infer patterns from these)
    - method_patterns → (if present) lookup table for deduplicated method signatures;
      when a method in full_analysis is a short key like "m0", resolve it via this table
+   - wiring → (if present) route_map with detected HTTP endpoints per controller/file;
+     use to infer the routing CONVENTION and naming pattern, NOT to enumerate endpoints
+   - interface_impl_map → (if present) maps interface names to their implementors;
+     use to identify core DI contracts and architectural boundaries,
+     name only PRIMARY interfaces (3+ implementors or layer-boundary contracts)
    - changes → semantic diffs (incremental scans only)
    - existing_agents_md → current content to preserve or update ({update_note})
 
@@ -76,7 +83,7 @@ It is NOT documentation. It is NOT a changelog. It is NOT a file index.
 
 ### `full_analysis` — SYNTHESIZE patterns, identify anchors
 
-Examine file paths, symbol names, signatures, constructors, and properties to:
+Examine file paths, symbol names, signatures, constructors, and decorators to:
 
 1. Detect recurring patterns → document as RULES
    - Naming: `clients.api.js`, `orders.api.js` → "API clients follow `<entity>.api.js`"
@@ -88,16 +95,47 @@ Examine file paths, symbol names, signatures, constructors, and properties to:
    - Context classes: if a class appears in constructors of many others → name it
    - Primary interfaces: if an interface is implemented across the codebase → name it
 
-3. Extract data model shapes from `properties` fields
-   - If an entity class has properties, document its key fields
-   - Focus on entities referenced across multiple layers — these are the core domain models
-   - Skip trivial/DTO-only entities with no cross-layer presence
+3. Detect domain model patterns from `is_dto` markers and naming conventions
+   - If many files are marked `is_dto: true` in a specific directory → that's the domain model layer
+   - If directory summaries show a naming_pattern like `*Entity` or `*Model` → document it
+   - Use constructor_deps across the codebase to see which layers CONSUME these entities
 
 4. Infer DI patterns from `constructor` fields
    - If most classes receive dependencies via constructor → document constructor injection as the pattern
    - If the same types appear repeatedly in constructors → those are the key services/abstractions
 
 If you cannot detect a pattern from the data, omit it. Never invent one.
+
+### `wiring.route_map` — infer routing conventions
+
+If present, examine route paths and HTTP methods to detect:
+- The routing pattern (attribute-based, decorator-based, convention-based, file-based)
+- URL naming conventions (e.g. `/api/<entity>/`, kebab-case, camelCase)
+- Whether routes are grouped by controller class or scattered across files
+Document the CONVENTION in Backend Guidelines or Conventions, not the individual routes.
+
+### `interface_impl_map` — identify core contracts
+
+If present, scan for interfaces with multiple implementors — these define
+architectural boundaries. Name them as architectural anchors (Rule 4c).
+An interface implemented by one class is just a typing detail; an interface
+implemented by 5+ classes is a PATTERN worth documenting.
+
+### Aggregated entries in `full_analysis`
+
+Not all entries are individual files. Some are directory-level summaries:
+- `kind: "directory_summary"` — a collapsed directory. Key fields:
+  - `common_methods`: method signatures shared by 60%+ of files (the layer's interface pattern)
+  - `naming_pattern`: detected class naming convention (e.g. `*Service`, `*Controller`)
+  - `outliers`: files that deviate from the common pattern
+  - `sample_files`: representative file paths
+- `kind: "dto_container"` — a file with only data classes and no logic methods
+- `kind: "overflow"` — directory exceeded cap; `remaining_files` shows hidden count
+- `kind: "test_directory_summary"` — collapsed test directory with file/function counts
+
+Use these to infer layer patterns. A directory_summary with naming_pattern `*Service`
+and common_methods `[execute, validate]` tells you: "services follow a command pattern
+with execute() and validate() as the standard interface."
 
 ### `project_structure.top_level_dirs` — module inventory source of truth
 
@@ -140,19 +178,25 @@ Layered: name each layer and the flow direction (e.g. Controller → Logic → R
 Domain: name the domains and their boundaries.
 Name the architectural anchor classes/interfaces here if identified (Rule 4 exceptions).
 
-### Key Models
-Only include if full_analysis contains entity classes with `properties` fields.
-For each core domain entity (referenced across multiple files/layers), list:
-- Its name, its layer/package, and its key properties (type + name)
-- Its constructor dependencies if it has them (reveals DI graph)
-Skip purely internal or generated entities. Omit this section if no meaningful
-entity data is present.
+### Key Models (OPTIONAL)
+Only include if full_analysis contains classes/structs marked `is_dto: true`
+across multiple directories, suggesting a clear domain model layer.
+When present, describe the domain model PATTERN:
+- Where domain entities live (directory convention)
+- Naming convention for entities (from naming_pattern if available)
+- How entities relate to the rest of the architecture (are they injected via
+  constructor_deps? do they implement shared interfaces from interface_impl_map?)
+Do NOT list individual entities. Document the PATTERN for creating new ones.
+Omit this section entirely if no clear domain model layer is detected.
 
 ### Backend Guidelines
 Only include if a backend is detected. Synthesize from full_analysis:
 - Base classes that MUST be extended for controllers, services, repositories, etc.
   Name them explicitly (Rule 4a). State what each one provides.
-- Constructor injection pattern if detected — name the key injectable services (Rule 4b/c)
+- Constructor injection pattern if detected — name the key injectable services (Rule 4b/c).
+  Use interface_impl_map to identify the core DI contracts binding the architecture.
+- Routing convention if wiring.route_map is present — describe the URL pattern,
+  HTTP method mapping, and whether routes are attribute/decorator/convention-based.
 - Required method signatures or lifecycle hooks (e.g. RegisterRoutes(), OnInit())
 - Error handling conventions (from patterns detected in method signatures)
 - Transaction/unit-of-work patterns if detected (idTrans, IUnitOfWork, etc.)
@@ -214,9 +258,10 @@ To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
 ## QUALITY BAR
 
 - Project Overview must state the tech stack explicitly — framework names, not just language names.
+  Use build_system.packages to identify specific libraries (ORMs, test frameworks, UI libs).
 - Module inventory must include EVERY entry from top_level_dirs. Zero omissions.
 - Backend Guidelines must name base classes and context classes an agent must use.
-- Key Models must document entity shapes if properties data is present.
+- Key Models must describe the domain model PATTERN (directory, naming, relationships) — never list entities.
 - Conventions must be actionable: agent knows exactly what to create, where, what to extend.
 - Every command must be exact and runnable. No placeholders.
 - Zero file enumeration tables. Zero symbol-list bullets (except Rule 4 exceptions).

@@ -124,7 +124,10 @@ def test_format_full_omits_decorators_when_empty() -> None:
 
 
 def test_format_full_includes_decorators_when_present() -> None:
-    syms = [_sym("MyController", kind="class", decorators=["ApiController", "Route"])]
+    syms = [
+        _sym("MyController", kind="class", decorators=["ApiController", "Route"]),
+        _sym("Get", kind="method", sig="public void Get()", parent="MyController"),
+    ]
     analysis = _analysis("src/Ctrl.cs", "c_sharp", syms)
     result = _format_full("src/Ctrl.cs", "new", analysis)
     assert result is not None
@@ -175,7 +178,7 @@ def test_format_full_empty_constructor_no_deps() -> None:
 
 
 def test_format_full_dto_class_gets_is_dto_flag() -> None:
-    """Class with no public methods but with implements is marked as DTO."""
+    """Class with no public methods but with implements is marked as DTO container."""
     syms = [
         _sym("Product", kind="class", implements=["IEntity"]),
         _sym("Name", kind="property", sig="public string Name", parent="Product"),
@@ -183,19 +186,20 @@ def test_format_full_dto_class_gets_is_dto_flag() -> None:
     ]
     result = _format_full("src/Product.cs", "new", _analysis("src/Product.cs", "c_sharp", syms))
     assert result is not None
-    cls = result["symbols"][0]
-    assert cls["is_dto"] is True
-    assert "properties" not in cls
+    assert result["kind"] == "dto_container"
+    assert result["is_dto"] is True
 
 
-def test_format_full_trivial_class_returns_none() -> None:
-    """Class with no methods, no deps, no implements, no decorators is trivial."""
+def test_format_full_trivial_class_returns_dto_container() -> None:
+    """Class with no methods, no deps, no implements, no decorators → dto_container."""
     syms = [
         _sym("PlainDto", kind="class"),
         _sym("Name", kind="property", sig="public string Name", parent="PlainDto"),
     ]
     result = _format_full("src/PlainDto.cs", "new", _analysis("src/PlainDto.cs", "c_sharp", syms))
-    assert result is None
+    assert result is not None
+    assert result["kind"] == "dto_container"
+    assert result["is_dto"] is True
 
 
 def test_format_full_class_with_methods_not_dto() -> None:
@@ -214,13 +218,15 @@ def test_format_full_class_with_methods_not_dto() -> None:
 
 
 def test_format_full_big_dto_no_properties() -> None:
-    """Large DTOs with no signal (no methods/deps/implements/decorators) are stripped."""
+    """Large DTOs with no signal → dto_container."""
     syms = [_sym("BigDto", kind="class")] + [
         _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigDto")
         for i in range(20)
     ]
     result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms))
-    assert result is None
+    assert result is not None
+    assert result["kind"] == "dto_container"
+    assert result["is_dto"] is True
 
 
 def test_format_full_interface_methods_listed() -> None:
@@ -239,14 +245,15 @@ def test_format_full_interface_methods_listed() -> None:
 
 
 def test_format_full_dto_no_private_properties() -> None:
-    """DTO with private properties but no signal is stripped as trivial."""
+    """DTO with private properties but no signal → dto_container."""
     syms = [
         _sym("Service", kind="class"),
         _sym("_cache", kind="property", sig="private Dictionary _cache", visibility="private", parent="Service"),
         _sym("Name", kind="property", sig="public string Name", parent="Service"),
     ]
     result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
-    assert result is None
+    assert result is not None
+    assert result["kind"] == "dto_container"
 
 
 def test_format_full_top_level_function_not_nested_under_class() -> None:

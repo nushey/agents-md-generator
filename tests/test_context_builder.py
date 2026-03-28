@@ -365,9 +365,11 @@ def test_aggregate_below_threshold_keeps_individual() -> None:
 
 
 def test_aggregate_above_threshold_produces_summary() -> None:
-    shared_syms = [_sym_dict("get"), _sym_dict("save"), _sym_dict("delete")]
+    shared_methods = ["public void get()", "public void save()", "public void delete()"]
     entries = [
-        _file_entry(f"src/repo{i}.py", "python", shared_syms)
+        _file_entry(f"src/repo{i}.py", "python", [
+            {"name": f"Repo{i}", "kind": "class", "visibility": "public", "methods": shared_methods}
+        ])
         for i in range(8)
     ]
     result = _aggregate_by_directory(entries, threshold=8)
@@ -376,17 +378,21 @@ def test_aggregate_above_threshold_produces_summary() -> None:
     assert summary["kind"] == "directory_summary"
     assert summary["file_count"] == 8
     assert summary["language"] == "python"
-    assert "get" in summary["common_methods"]
+    assert "public void get()" in summary["common_methods"]
 
 
-def test_aggregate_weak_pattern_keeps_individual() -> None:
-    # Each file has completely different symbols — no common methods
+def test_aggregate_weak_pattern_produces_fallback_summary() -> None:
+    # Each file has completely different symbols — no common methods.
+    # With the generic fallback, this still produces a directory_summary.
     entries = [
         _file_entry(f"src/f{i}.py", "python", [_sym_dict(f"unique_{i}")])
         for i in range(8)
     ]
     result = _aggregate_by_directory(entries, threshold=8)
-    assert all(e.get("kind") != "directory_summary" for e in result)
+    summaries = [e for e in result if e.get("kind") == "directory_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["file_count"] == 8
+    assert summaries[0]["note"] == "No common method pattern detected"
 
 
 def test_aggregate_minority_language_kept_individual() -> None:

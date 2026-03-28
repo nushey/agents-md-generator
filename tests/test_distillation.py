@@ -15,8 +15,8 @@ def test_is_low_entropy_dto_only():
     )
     assert _is_low_entropy(analysis) is True
 
-def test_is_low_entropy_too_few_containers():
-    # Only 2 classes - should NOT be minified
+def test_is_low_entropy_few_containers_still_detected():
+    # Even 1-2 classes with no methods are low entropy
     analysis = FileAnalysis(
         path="Small.cs",
         language="c_sharp",
@@ -25,7 +25,7 @@ def test_is_low_entropy_too_few_containers():
             SymbolInfo(name="Two", kind="class", visibility="public"),
         ]
     )
-    assert _is_low_entropy(analysis) is False
+    assert _is_low_entropy(analysis) is True
 
 def test_is_low_entropy_with_methods():
     # File with classes and methods (logic)

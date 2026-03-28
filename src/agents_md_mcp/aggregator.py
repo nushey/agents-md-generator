@@ -10,16 +10,19 @@ _MAX_FILES_PER_LAYER = 5        # cap unaggregated files per directory
 
 
 def _extract_common_methods(entries: list[dict]) -> list[str]:
-    """Return method/function names that appear in >= 60% of the given file entries."""
+    """Return method signatures that appear in >= 60% of the given file entries."""
     if not entries:
         return []
     method_counts: dict[str, int] = {}
     for entry in entries:
-        seen = {s["name"] for s in entry.get("symbols", [])}
-        for name in seen:
-            method_counts[name] = method_counts.get(name, 0) + 1
+        seen: set[str] = set()
+        for sym in entry.get("symbols", []):
+            for method in sym.get("methods", []):
+                seen.add(method)
+        for sig in seen:
+            method_counts[sig] = method_counts.get(sig, 0) + 1
     cutoff = len(entries) * _COMMON_METHOD_FREQUENCY
-    return sorted(name for name, count in method_counts.items() if count >= cutoff)
+    return sorted(sig for sig, count in method_counts.items() if count >= cutoff)
 
 
 def _extract_class_pattern(entries: list[dict]) -> dict | None:
@@ -151,8 +154,11 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
 
         common_methods = _extract_common_methods(dominant_entries)
 
-        avg_symbols = sum(len(e.get("symbols", [])) for e in dominant_entries if "symbols" in e) / len(dominant_entries)
-        coverage = len(common_methods) / avg_symbols if avg_symbols > 0 else 0
+        avg_methods = sum(
+            sum(len(s.get("methods", [])) for s in e.get("symbols", []))
+            for e in dominant_entries
+        ) / len(dominant_entries)
+        coverage = len(common_methods) / avg_methods if avg_methods > 0 else 0
 
         # Special Case: Directory of DTO Containers (Minified)
         if all(e.get("kind") == "dto_container" for e in dominant_entries):
@@ -189,23 +195,39 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
                 result.append(dto_summary)
                 result.extend(minority_entries)
             else:
-                result.extend(dir_entries)
+                # Generic fallback — collapse into summary to avoid payload bloat
+                n = len(dominant_entries)
+                indices = sorted({0, n // 2, n - 1})
+                fallback: dict = {
+                    "directory": (directory + "/").replace("//", "/"),
+                    "kind": "directory_summary",
+                    "file_count": n,
+                    "language": dominant_lang,
+                    "note": "No common method pattern detected",
+                    "sample_files": [dominant_entries[i]["file"] for i in indices],
+                }
+                class_pattern = _extract_class_pattern(dominant_entries)
+                if class_pattern:
+                    fallback["naming_pattern"] = class_pattern
+                result.append(fallback)
+                result.extend(minority_entries)
             continue
 
         common_method_set = set(common_methods)
         class_pattern = _extract_class_pattern(dominant_entries)
 
-        # Outliers: files that have symbols NOT in common_methods (unique behavior)
+        # Outliers: files that have methods NOT in common_methods (unique behavior)
         outliers = []
         for entry in dominant_entries:
-            unique = [
-                s for s in entry.get("symbols", [])
-                if s["name"] not in common_method_set
-            ]
-            if unique:
+            unique_methods: list[str] = []
+            for sym in entry.get("symbols", []):
+                for method in sym.get("methods", []):
+                    if method not in common_method_set:
+                        unique_methods.append(method)
+            if unique_methods:
                 outliers.append({
                     "file": entry["file"],
-                    "unique_symbols": [s["name"] for s in unique[:5]],
+                    "unique_methods": unique_methods[:5],
                 })
 
         # Sample files: first, middle, last for representativeness

@@ -136,7 +136,7 @@ def _is_low_entropy(analysis: FileAnalysis) -> bool:
         return False
 
     containers = [s for s in public_syms if s.kind in _MEMBER_CONTAINER_KINDS]
-    if not containers or len(containers) < 3:
+    if not containers:
         return False
 
     for container in containers:
@@ -150,7 +150,7 @@ def _is_low_entropy(analysis: FileAnalysis) -> bool:
     return True
 
 
-_MAX_METHODS_PER_SYMBOL = 10
+_MAX_METHODS_PER_SYMBOL = 8
 _MAX_SYMBOLS_PER_FILE = 10
 
 _MEMBER_CONTAINER_KINDS = frozenset({"class", "interface", "struct"})

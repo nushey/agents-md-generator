@@ -14,6 +14,7 @@ over the MCP wire, and no filesystem access is required from the client side.
 import json
 import logging
 import sys
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -45,6 +46,10 @@ PAYLOAD_FILENAME = "payload.json"
 CHUNK_LINES = 500
 
 mcp = FastMCP("agents_md_mcp")
+
+_server = getattr(mcp, "_mcp_server", None)
+if _server is not None:
+    _server.version = pkg_version("agents-md-generator")
 
 
 @mcp.tool(

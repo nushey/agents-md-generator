@@ -1,3 +1,5 @@
 """agents-md-generator: MCP server for generating AGENTS.md from codebase analysis."""
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _v
+
+__version__ = _v("agents-md-generator")

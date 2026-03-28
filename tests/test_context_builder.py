@@ -27,8 +27,8 @@ def _analysis(path: str, lang: str = "python", symbols: list[SymbolInfo] | None 
     return FileAnalysis(path=path, language=lang, symbols=symbols or [])
 
 
-def _sym(name: str, kind: str = "function", visibility: str = "public", sig: str = "sig") -> SymbolInfo:
-    return SymbolInfo(name=name, kind=kind, visibility=visibility, signature=sig)  # type: ignore[arg-type]
+def _sym(name: str, kind: str = "function", visibility: str = "public", sig: str = "sig", parent: str | None = None) -> SymbolInfo:
+    return SymbolInfo(name=name, kind=kind, visibility=visibility, signature=sig, parent=parent)  # type: ignore[arg-type]
 
 
 # ── _passes_threshold ─────────────────────────────────────────────────────────
@@ -272,11 +272,14 @@ def test_directory_language_detection(tmp_path: Path) -> None:
 # ── build_payload ─────────────────────────────────────────────────────────────
 
 def test_build_payload_new_files(tmp_path: Path) -> None:
-    _write(tmp_path / "src" / "app.py", "def run(): pass")
+    _write(tmp_path / "src" / "app.py", "class App:\n  def run(self): pass")
     cfg = load_config(tmp_path)
 
     changes = [FileChange(path="src/app.py", status="new", new_hash="abc")]
-    analyses = {"src/app.py": _analysis("src/app.py", "python", [_sym("run")])}
+    analyses = {"src/app.py": _analysis("src/app.py", "python", [
+        _sym("App", kind="class"),
+        _sym("run", kind="method", sig="public void run()", parent="App"),
+    ])}
 
     payload = build_payload(tmp_path, cfg, changes, analyses, cache=None)
 

@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 
 PAYLOAD_FILENAME = "payload.json"
 CHUNK_LINES = 500
+CHUNK_BYTES = 50_000  # ~50kb per chunk for compact (single-line) JSON
+
+def _compute_total_chunks(payload_text: str, compact: bool) -> int:
+    """Compute total chunks based on format: line-based for pretty, byte-based for compact."""
+    if compact:
+        size = len(payload_text.encode("utf-8"))
+        return (size + CHUNK_BYTES - 1) // CHUNK_BYTES
+    lines = payload_text.count("\n") + 1
+    return (lines + CHUNK_LINES - 1) // CHUNK_LINES
+
 
 mcp = FastMCP("agents_md_mcp")
 
@@ -181,17 +191,23 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
     logger.info("Cache saved with %d entries", len(new_cache.files))
 
     # 7. Write payload to disk — never send it inline over MCP
+    #    Use compact JSON (no indent) for large payloads to save ~30% size.
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
     payload_json = json.dumps(payload, indent=2, default=str)
+    compact = len(payload_json) > 300_000
+    if compact:
+        payload_json = json.dumps(payload, default=str, separators=(",", ":"))
+        logger.info("Using compact JSON (payload > 300kb)")
     payload_path.write_text(payload_json, encoding="utf-8")
-    payload_lines = payload_json.count("\n") + 1
-    logger.info("Payload written to %s (%d lines)", payload_path, payload_lines)
+    payload_size = len(payload_json.encode("utf-8"))
+    logger.info("Payload written to %s (%d bytes)", payload_path, payload_size)
 
     agents_md_path = (project_path / config.agents_md_path.lstrip("./")).resolve()
 
     # 8. Return small response with instructions to call get_payload_chunk
+    num_chunks = _compute_total_chunks(payload_json, compact)
     return json.dumps(
-        _build_response(payload_path, payload_lines, agents_md_path, project_path),
+        _build_response(payload_path, num_chunks, agents_md_path, project_path),
         indent=2,
     )
 
@@ -236,18 +252,36 @@ async def get_payload_chunk(params: GetPayloadChunkInput) -> str:
         })
 
     payload_text = payload_path.read_text(encoding="utf-8")
-    lines = payload_text.splitlines(keepends=True)
-    total_lines = len(lines)
-    total_chunks = (total_lines + CHUNK_LINES - 1) // CHUNK_LINES
+    payload_bytes = payload_text.encode("utf-8")
 
-    if params.chunk_index < 0 or params.chunk_index >= total_chunks:
-        return json.dumps({
-            "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
-        })
+    # Detect compact mode: single-line JSON uses byte-based chunking
+    compact = payload_text.count("\n") < 5
 
-    start = params.chunk_index * CHUNK_LINES
-    end = min(start + CHUNK_LINES, total_lines)
-    chunk_data = "".join(lines[start:end])
+    if compact:
+        total_size = len(payload_bytes)
+        total_chunks = (total_size + CHUNK_BYTES - 1) // CHUNK_BYTES
+
+        if params.chunk_index < 0 or params.chunk_index >= total_chunks:
+            return json.dumps({
+                "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
+            })
+
+        start = params.chunk_index * CHUNK_BYTES
+        end = min(start + CHUNK_BYTES, total_size)
+        chunk_data = payload_bytes[start:end].decode("utf-8", errors="replace")
+    else:
+        lines = payload_text.splitlines(keepends=True)
+        total_lines = len(lines)
+        total_chunks = (total_lines + CHUNK_LINES - 1) // CHUNK_LINES
+
+        if params.chunk_index < 0 or params.chunk_index >= total_chunks:
+            return json.dumps({
+                "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
+            })
+
+        start = params.chunk_index * CHUNK_LINES
+        end = min(start + CHUNK_LINES, total_lines)
+        chunk_data = "".join(lines[start:end])
 
     has_more = params.chunk_index < total_chunks - 1
 
@@ -268,17 +302,14 @@ async def get_payload_chunk(params: GetPayloadChunkInput) -> str:
 
 def _build_response(
     payload_path: Path,
-    payload_lines: int,
+    num_chunks: int,
     agents_md_path: Path,
     project_path: Path,
 ) -> dict:
     """Build the small response that instructs the agent to use get_payload_chunk."""
 
-    num_chunks = (payload_lines + CHUNK_LINES - 1) // CHUNK_LINES
-
     return {
         "status": "ready",
-        "payload_lines": payload_lines,
         "total_chunks": num_chunks,
         "agents_md_path": str(agents_md_path),
         "instructions": (

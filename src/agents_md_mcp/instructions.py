@@ -41,13 +41,15 @@ TASK: {action} AGENTS.md file at the project root.
    If a linter is not in config_files_found, do not claim it exists.
 
 6. USE ONLY the data in this payload:
-   - metadata → project name, detected languages
+   - metadata → project name, detected languages (language applies to ALL file entries)
    - project_structure.top_level_dirs → top-level projects/packages (module inventory source)
    - project_structure.directories → all directories (use to infer layer structure)
    - build_system → detected tools, package files, parsed scripts
    - entry_points → bootstrap/main files per package with their role
    - env_vars → environment variables referenced in source or .env.example files
    - full_analysis → public symbols, constructors, properties per file (infer patterns from these)
+   - method_patterns → (if present) lookup table for deduplicated method signatures;
+     when a method in full_analysis is a short key like "m0", resolve it via this table
    - changes → semantic diffs (incremental scans only)
    - existing_agents_md → current content to preserve or update ({update_note})
 

@@ -1,6 +1,7 @@
 """Assembles the structured JSON payload from all project scanners."""
 
 import logging
+from collections import Counter
 from pathlib import Path
 
 from .aggregator import _aggregate_by_directory
@@ -22,6 +23,8 @@ from .symbol_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_METHOD_DEDUP_MIN_OCCURRENCES = 3  # signature must appear >= 3 times to be deduplicated
 
 
 def _build_interface_impl_map(analyses: dict[str, FileAnalysis]) -> dict[str, list[str]]:
@@ -57,6 +60,69 @@ def _build_interface_impl_map(analyses: dict[str, FileAnalysis]) -> dict[str, li
                     impl_map.setdefault(iface, []).append(impl)
 
     return impl_map
+
+
+def _effective_threshold(base_threshold: int, total_files: int) -> int:
+    """Lower aggregation threshold for large projects to collapse more directories."""
+    if total_files > 800:
+        return max(3, base_threshold // 2)
+    if total_files > 400:
+        return max(4, base_threshold - 2)
+    return base_threshold
+
+
+def _deduplicate_methods(entries: list[dict]) -> dict[str, str]:
+    """Extract repeated method signatures into a lookup registry.
+
+    Scans all entries for method signatures appearing >= _METHOD_DEDUP_MIN_OCCURRENCES
+    times. Returns a dict mapping short keys ("m0", "m1", ...) to full signatures.
+    Modifies entries IN PLACE, replacing inline signatures with their short keys.
+    """
+    # Count all method signature occurrences
+    sig_counts: Counter[str] = Counter()
+    for entry in entries:
+        for sym in entry.get("symbols", []):
+            for method in sym.get("methods", []):
+                sig_counts[method] += 1
+        # Also check common_methods in directory summaries
+        for method in entry.get("common_methods", []):
+            sig_counts[method] += 1
+
+    # Build the registry for frequently repeated signatures
+    registry: dict[str, str] = {}
+    reverse: dict[str, str] = {}  # signature → key
+    idx = 0
+    for sig, count in sig_counts.most_common():
+        if count < _METHOD_DEDUP_MIN_OCCURRENCES:
+            break
+        key = f"m{idx}"
+        registry[key] = sig
+        reverse[sig] = key
+        idx += 1
+
+    if not registry:
+        return {}
+
+    # Replace inline signatures with keys
+    for entry in entries:
+        for sym in entry.get("symbols", []):
+            if "methods" in sym:
+                sym["methods"] = [reverse.get(m, m) for m in sym["methods"]]
+        if "common_methods" in entry:
+            entry["common_methods"] = [reverse.get(m, m) for m in entry["common_methods"]]
+
+    return registry
+
+
+def _strip_language_from_file_entries(entries: list[dict]) -> None:
+    """Remove 'language' from individual file entries (not directory summaries).
+
+    Language is already in metadata.languages_detected. Directory summaries
+    keep their language field since they distinguish mixed-language directories.
+    """
+    for entry in entries:
+        if "file" in entry and "language" in entry:
+            del entry["language"]
 
 
 def build_payload(
@@ -180,13 +246,21 @@ def build_payload(
     # Aggregate production dirs FIRST (before test summaries are mixed in)
     # _aggregate_by_directory expects entries with a "file" key; test_directory_summary
     # entries only have "directory", so they must be added afterwards.
+    # Use adaptive threshold for large projects.
+    agg_threshold = _effective_threshold(
+        config.dir_aggregation_threshold, len(full_analysis_payload)
+    )
     full_analysis_payload = _aggregate_by_directory(
-        full_analysis_payload, config.dir_aggregation_threshold
+        full_analysis_payload, agg_threshold
     )
 
     # Collapse test files into per-directory summaries and append at the end
     if test_analysis_payload:
         full_analysis_payload.extend(_summarize_test_files(test_analysis_payload))
+
+    # Post-processing: deduplicate method signatures and strip per-entry language
+    method_patterns = _deduplicate_methods(full_analysis_payload)
+    _strip_language_from_file_entries(full_analysis_payload)
 
     env_vars = _detect_env_vars(root, config)
     entry_points = _detect_entry_points(root, config)
@@ -207,6 +281,8 @@ def build_payload(
         "full_analysis": full_analysis_payload,
         "existing_agents_md": existing_agents_md,
     }
+    if method_patterns:
+        payload["method_patterns"] = method_patterns
     if wiring:
         payload["wiring"] = wiring
     if interface_impl_map:

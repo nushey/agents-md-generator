@@ -13,6 +13,7 @@ def _sym(
     sig: str = "sig",
     parent: str | None = None,
     decorators: list[str] | None = None,
+    implements: list[str] | None = None,
 ) -> SymbolInfo:
     return SymbolInfo(
         name=name,
@@ -21,6 +22,7 @@ def _sym(
         signature=sig,
         parent=parent,
         decorators=decorators or [],
+        implements=implements or [],
     )
 
 
@@ -97,17 +99,24 @@ def test_format_full_returns_none_for_minified_js() -> None:
 
 
 def test_format_full_includes_public_symbols() -> None:
-    syms = [_sym("processOrder"), _sym("_internal", visibility="private")]
+    syms = [
+        _sym("OrderService", kind="class", decorators=["Injectable"]),
+        _sym("processOrder", kind="method", sig="public void processOrder()", parent="OrderService"),
+        _sym("_internal", visibility="private"),
+    ]
     analysis = _analysis("src/orders.py", "python", syms)
     result = _format_full("src/orders.py", "new", analysis)
     assert result is not None
     names = [s["name"] for s in result["symbols"]]
-    assert "processOrder" in names
+    assert "OrderService" in names
     assert "_internal" not in names
 
 
 def test_format_full_omits_decorators_when_empty() -> None:
-    syms = [_sym("MyClass", kind="class", decorators=[])]
+    syms = [
+        _sym("MyClass", kind="class", decorators=[]),
+        _sym("DoWork", kind="method", sig="public void DoWork()", parent="MyClass"),
+    ]
     analysis = _analysis("src/Foo.cs", "c_sharp", syms)
     result = _format_full("src/Foo.cs", "new", analysis)
     assert result is not None
@@ -157,7 +166,7 @@ def test_format_full_empty_constructor_no_deps() -> None:
     syms = [
         _sym("SimpleEntity", kind="class"),
         _sym("SimpleEntity", kind="constructor", sig="public SimpleEntity()", parent="SimpleEntity"),
-        _sym("Id", kind="property", sig="public int Id", parent="SimpleEntity"),
+        _sym("Save", kind="method", sig="public void Save()", parent="SimpleEntity"),
     ]
     result = _format_full("src/SimpleEntity.cs", "new", _analysis("src/SimpleEntity.cs", "c_sharp", syms))
     assert result is not None
@@ -166,9 +175,9 @@ def test_format_full_empty_constructor_no_deps() -> None:
 
 
 def test_format_full_dto_class_gets_is_dto_flag() -> None:
-    """Class with no public methods is marked as DTO — no properties emitted."""
+    """Class with no public methods but with implements is marked as DTO."""
     syms = [
-        _sym("Product", kind="class"),
+        _sym("Product", kind="class", implements=["IEntity"]),
         _sym("Name", kind="property", sig="public string Name", parent="Product"),
         _sym("Price", kind="property", sig="public decimal Price", parent="Product"),
     ]
@@ -177,6 +186,16 @@ def test_format_full_dto_class_gets_is_dto_flag() -> None:
     cls = result["symbols"][0]
     assert cls["is_dto"] is True
     assert "properties" not in cls
+
+
+def test_format_full_trivial_class_returns_none() -> None:
+    """Class with no methods, no deps, no implements, no decorators is trivial."""
+    syms = [
+        _sym("PlainDto", kind="class"),
+        _sym("Name", kind="property", sig="public string Name", parent="PlainDto"),
+    ]
+    result = _format_full("src/PlainDto.cs", "new", _analysis("src/PlainDto.cs", "c_sharp", syms))
+    assert result is None
 
 
 def test_format_full_class_with_methods_not_dto() -> None:
@@ -195,16 +214,13 @@ def test_format_full_class_with_methods_not_dto() -> None:
 
 
 def test_format_full_big_dto_no_properties() -> None:
-    """Even large DTOs only get is_dto flag — no properties payload."""
+    """Large DTOs with no signal (no methods/deps/implements/decorators) are stripped."""
     syms = [_sym("BigDto", kind="class")] + [
         _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigDto")
         for i in range(20)
     ]
     result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms))
-    assert result is not None
-    cls = result["symbols"][0]
-    assert cls["is_dto"] is True
-    assert "properties" not in cls
+    assert result is None
 
 
 def test_format_full_interface_methods_listed() -> None:
@@ -223,17 +239,14 @@ def test_format_full_interface_methods_listed() -> None:
 
 
 def test_format_full_dto_no_private_properties() -> None:
-    """DTO with private properties — only gets is_dto flag, no property listing."""
+    """DTO with private properties but no signal is stripped as trivial."""
     syms = [
         _sym("Service", kind="class"),
         _sym("_cache", kind="property", sig="private Dictionary _cache", visibility="private", parent="Service"),
         _sym("Name", kind="property", sig="public string Name", parent="Service"),
     ]
     result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
-    assert result is not None
-    cls = result["symbols"][0]
-    assert cls["is_dto"] is True
-    assert "properties" not in cls
+    assert result is None
 
 
 def test_format_full_top_level_function_not_nested_under_class() -> None:
@@ -296,7 +309,11 @@ def test_format_full_class_with_implements() -> None:
 
 
 def test_format_full_class_without_implements_has_no_key() -> None:
-    syms = [_sym("Simple", kind="class")]
+    """Class without implements but with methods still produces output."""
+    syms = [
+        _sym("Simple", kind="class"),
+        _sym("Run", kind="method", sig="public void Run()", parent="Simple"),
+    ]
     result = _format_full("src/Simple.cs", "new", _analysis("src/Simple.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]

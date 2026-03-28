@@ -57,6 +57,56 @@ def _slim_symbol(sym) -> dict:
 
 _MINIFIED_SHORT_NAME_THRESHOLD = 0.30  # >30% single/double-char names → minified
 
+# ── Generated file detection ─────────────────────────────────────────────────
+
+_GENERATED_PATH_MARKERS = (
+    "Connected Services/", "Service References/", "/Generated/",
+    "/obj/", "/auto_generated/", "/auto-generated/",
+)
+_GENERATED_SUFFIXES = (
+    ".Designer.cs", ".g.cs", ".g.i.cs", "Reference.cs",
+    ".generated.cs", ".designer.cs",
+)
+
+
+def _is_generated(path: str, analysis: FileAnalysis) -> bool:
+    """Return True if the file is auto-generated code with no architectural value."""
+    # Path-based detection
+    if any(marker in path for marker in _GENERATED_PATH_MARKERS):
+        return True
+    if any(path.endswith(suffix) for suffix in _GENERATED_SUFFIXES):
+        return True
+    # Decorator-based detection: first few symbols have GeneratedCode attributes
+    for sym in analysis.symbols[:3]:
+        if sym.decorators:
+            for dec in sym.decorators:
+                if "GeneratedCode" in dec or "System.CodeDom.Compiler" in dec:
+                    return True
+    return False
+
+
+# ── Noise decorator filtering ────────────────────────────────────────────────
+
+_NOISE_DECORATOR_PREFIXES = (
+    "System.Runtime.Serialization.",
+    "System.CodeDom.Compiler.",
+    "System.SerializableAttribute",
+    "System.Diagnostics.DebuggerStepThroughAttribute",
+    "System.Diagnostics.DebuggerNonUserCode",
+    "KnownTypeAttribute",
+    "DataContractAttribute",
+    "DataMemberAttribute",
+    "System.ComponentModel.EditorBrowsable",
+)
+
+
+def _filter_decorators(decorators: list[str]) -> list[str]:
+    """Strip noise decorators that add no architectural signal."""
+    return [
+        d for d in decorators
+        if not any(d.startswith(prefix) for prefix in _NOISE_DECORATOR_PREFIXES)
+    ]
+
 
 def _is_minified(analysis: FileAnalysis) -> bool:
     """Return True if the file looks like minified or bundled JS/TS.
@@ -159,6 +209,9 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     if _is_minified(analysis):
         return None
 
+    if _is_generated(path, analysis):
+        return None
+
     if _is_low_entropy(analysis):
         # Minify DTO-only files
         containers = [s for s in analysis.symbols if _is_public(s) and s.kind in _MEMBER_CONTAINER_KINDS]
@@ -213,7 +266,9 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
                 entry["is_dto"] = True
 
             if sym.decorators:
-                entry["decorators"] = sym.decorators
+                filtered = _filter_decorators(sym.decorators)
+                if filtered:
+                    entry["decorators"] = filtered
             symbols_out.append(entry)
 
         elif sym.parent is None:
@@ -223,10 +278,24 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
                 "signature": sym.signature,
             }
             if sym.decorators:
-                entry["decorators"] = sym.decorators
+                filtered = _filter_decorators(sym.decorators)
+                if filtered:
+                    entry["decorators"] = filtered
             symbols_out.append(entry)
 
     if not symbols_out:
+        return None
+
+    # Strip trivial entries: all symbols have no methods, no deps, no implements,
+    # no decorators — these files contribute no architectural signal.
+    has_signal = any(
+        s.get("methods")
+        or s.get("constructor_deps")
+        or s.get("decorators")
+        or (s.get("implements") and s["implements"] != ["object"])
+        for s in symbols_out
+    )
+    if not has_signal:
         return None
 
     total = len(symbols_out)
@@ -250,7 +319,7 @@ def _summarize_test_files(entries: list[dict]) -> list[dict]:
     summaries = []
     for d, files in sorted(by_dir.items()):
         total_fns = sum(len(f.get("symbols", [])) for f in files)
-        languages = list({f["language"] for f in files})
+        languages = list({f["language"] for f in files if "language" in f})
         summaries.append({
             "directory": d + "/",
             "kind": "test_directory_summary",

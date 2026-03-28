@@ -220,6 +220,20 @@ def _detect_build_systems(root: Path) -> dict:
             except (ET.ParseError, OSError):
                 continue
 
+    # Deduplicate dotnet packages: extract common ones shared across >50% of projects
+    if dotnet_projects and len(dotnet_projects) > 1:
+        pkg_counts: dict[str, int] = {}
+        for proj in dotnet_projects:
+            for pkg in proj.get("packages", []):
+                pkg_counts[pkg] = pkg_counts.get(pkg, 0) + 1
+        cutoff = len(dotnet_projects) * 0.5
+        common_pkgs = sorted(pkg for pkg, count in pkg_counts.items() if count >= cutoff)
+        common_set = set(common_pkgs)
+        if common_pkgs:
+            for proj in dotnet_projects:
+                proj["packages"] = [p for p in proj["packages"] if p not in common_set]
+            detected_extras["dotnet_common_packages"] = common_pkgs
+
     return {
         "detected": detected,
         "package_files": package_files,

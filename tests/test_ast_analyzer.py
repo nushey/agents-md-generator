@@ -136,6 +136,47 @@ def test_csharp_class_members_default_private() -> None:
     assert validate.visibility == "private"
 
 
+def test_csharp_class_implements_interfaces() -> None:
+    """Class inheriting interfaces populates the implements field."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    sql_repo = _by_name(result, "SqlRepository")
+    assert sql_repo.kind == "class"
+    assert "IRepository" in sql_repo.implements
+    assert "IDisposable" in sql_repo.implements
+
+
+def test_csharp_class_without_bases_has_empty_implements() -> None:
+    """Class without base list has empty implements."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    entity = _by_name(result, "SimpleEntity")
+    assert entity.implements == []
+
+
+def test_csharp_attributes_include_arguments() -> None:
+    """Attributes with arguments include the full text: HttpGet("{id}")."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    controller = _by_name(result, "OrderController")
+    assert any("api/orders" in d for d in controller.decorators)
+
+    get_method = next(s for s in result.symbols if s.name == "Get" and s.parent == "OrderController")
+    assert any("{id}" in d for d in get_method.decorators)
+
+
+def test_csharp_attributes_without_args_are_plain_names() -> None:
+    """Attributes without arguments are just names: HttpPost (no parens)."""
+    src = (FIXTURES / "sample.cs").read_bytes()
+    result = CSharpAnalyzer().analyze(Path("sample.cs"), src)
+
+    create = next(s for s in result.symbols if s.name == "Create" and s.parent == "OrderController")
+    assert "HttpPost" in create.decorators
+
+
 def test_csharp_toplevel_class_without_modifier_is_internal() -> None:
     """Top-level class without access modifier defaults to internal."""
     src = (FIXTURES / "sample.cs").read_bytes()

@@ -46,6 +46,25 @@ namespace MyApp.Services
         void Save(Order order);
     }
 
+    public class SqlRepository : IRepository, IDisposable
+    {
+        public Task<Order> FindAsync(int id) { return null; }
+        public void Save(Order order) {}
+        public void Dispose() {}
+    }
+
+    [ApiController]
+    [Route("api/orders")]
+    public class OrderController
+    {
+        [HttpGet("{id}")]
+        public Order Get(int id) { return null; }
+
+        [Authorize("Admin")]
+        [HttpPost]
+        public void Create(Order order) {}
+    }
+
     // No modifier → internal by default
     class InternalHelper
     {

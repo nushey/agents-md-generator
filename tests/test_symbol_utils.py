@@ -1,7 +1,7 @@
 """Tests for symbol_utils.py — _is_minified, _format_full, _slim_symbol."""
 
 from agents_md_mcp.models import FileAnalysis, SymbolInfo
-from agents_md_mcp.symbol_utils import _format_full, _is_minified, _slim_symbol
+from agents_md_mcp.symbol_utils import _format_full, _is_minified, _parse_constructor_deps, _slim_symbol
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ def test_format_full_includes_decorators_when_present() -> None:
 def test_format_full_class_includes_public_methods() -> None:
     syms = [
         _sym("OrderService", kind="class"),
-        _sym("Create", kind="method", parent="OrderService"),
+        _sym("Create", kind="method", sig="public void Create(Order order)", parent="OrderService"),
         _sym("_validate", kind="method", visibility="private", parent="OrderService"),
     ]
     analysis = _analysis("src/OrderService.cs", "c_sharp", syms)
@@ -133,26 +133,27 @@ def test_format_full_class_includes_public_methods() -> None:
     assert result is not None
     cls = result["symbols"][0]
     assert cls["name"] == "OrderService"
-    assert "Create" in cls["methods"]
-    assert "_validate" not in cls["methods"]
+    assert any("Create" in m for m in cls["methods"])
+    assert not any("_validate" in m for m in cls["methods"])
 
 
-def test_format_full_constructor_with_params_is_included() -> None:
-    """Constructor with parameters is included as 'constructor' field."""
+def test_format_full_constructor_deps_extracted() -> None:
+    """Constructor with DI params populates constructor_deps with type names."""
     syms = [
         _sym("OrderService", kind="class"),
-        _sym("OrderService", kind="constructor", sig="public OrderService(IRepository repo)", parent="OrderService"),
-        _sym("Create", kind="method", parent="OrderService"),
+        _sym("OrderService", kind="constructor", sig="public OrderService(IRepository repo, ILogger logger)", parent="OrderService"),
+        _sym("Create", kind="method", sig="public void Create()", parent="OrderService"),
     ]
     result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    assert "constructor" in cls
-    assert "IRepository" in cls["constructor"]
+    assert "constructor_deps" in cls
+    assert "IRepository" in cls["constructor_deps"]
+    assert "ILogger" in cls["constructor_deps"]
 
 
-def test_format_full_empty_constructor_is_excluded() -> None:
-    """Constructor with no parameters is not included."""
+def test_format_full_empty_constructor_no_deps() -> None:
+    """Constructor with no parameters produces no constructor_deps field."""
     syms = [
         _sym("SimpleEntity", kind="class"),
         _sym("SimpleEntity", kind="constructor", sig="public SimpleEntity()", parent="SimpleEntity"),
@@ -161,11 +162,11 @@ def test_format_full_empty_constructor_is_excluded() -> None:
     result = _format_full("src/SimpleEntity.cs", "new", _analysis("src/SimpleEntity.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    assert "constructor" not in cls
+    assert "constructor_deps" not in cls
 
 
-def test_format_full_properties_are_included() -> None:
-    """Public properties are listed under the class entry."""
+def test_format_full_dto_class_gets_is_dto_flag() -> None:
+    """Class with no public methods is marked as DTO — no properties emitted."""
     syms = [
         _sym("Product", kind="class"),
         _sym("Name", kind="property", sig="public string Name", parent="Product"),
@@ -174,26 +175,27 @@ def test_format_full_properties_are_included() -> None:
     result = _format_full("src/Product.cs", "new", _analysis("src/Product.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    assert "string Name" in cls["properties"]
-    assert "decimal Price" in cls["properties"]
+    assert cls["is_dto"] is True
+    assert "properties" not in cls
 
 
-def test_format_full_properties_omitted_when_class_has_methods() -> None:
-    """Properties are omitted when the class has public methods."""
+def test_format_full_class_with_methods_not_dto() -> None:
+    """Class with public methods is NOT a DTO."""
     syms = [
         _sym("OrderService", kind="class"),
         _sym("Status", kind="property", sig="public string Status", parent="OrderService"),
-        _sym("Process", kind="method", parent="OrderService"),
+        _sym("Process", kind="method", sig="public void Process()", parent="OrderService"),
     ]
     result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
+    assert "is_dto" not in cls
     assert "properties" not in cls
-    assert "Process" in cls["methods"]
+    assert any("Process" in m for m in cls["methods"])
 
 
-def test_format_full_properties_all_inline_when_no_methods() -> None:
-    """All properties are included inline as a string when class has no methods."""
+def test_format_full_big_dto_no_properties() -> None:
+    """Even large DTOs only get is_dto flag — no properties payload."""
     syms = [_sym("BigDto", kind="class")] + [
         _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigDto")
         for i in range(20)
@@ -201,28 +203,27 @@ def test_format_full_properties_all_inline_when_no_methods() -> None:
     result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    assert isinstance(cls["properties"], str)
-    assert cls["properties"].count(",") == 19  # 20 props → 19 commas
-    assert "total_properties" not in cls
+    assert cls["is_dto"] is True
+    assert "properties" not in cls
 
 
 def test_format_full_interface_methods_listed() -> None:
-    """Interface methods are listed under the interface entry."""
+    """Interface methods are listed under the interface entry as signatures."""
     syms = [
         _sym("IRepository", kind="interface"),
-        _sym("GetAll", kind="method", parent="IRepository"),
-        _sym("Save", kind="method", parent="IRepository"),
+        _sym("GetAll", kind="method", sig="public Task<List<T>> GetAll()", parent="IRepository"),
+        _sym("Save", kind="method", sig="public Task Save(T entity)", parent="IRepository"),
     ]
     result = _format_full("src/IRepository.cs", "new", _analysis("src/IRepository.cs", "c_sharp", syms))
     assert result is not None
     iface = result["symbols"][0]
     assert iface["kind"] == "interface"
-    assert "GetAll" in iface["methods"]
-    assert "Save" in iface["methods"]
+    assert any("GetAll" in m for m in iface["methods"])
+    assert any("Save" in m for m in iface["methods"])
 
 
-def test_format_full_private_property_excluded() -> None:
-    """Private properties are not listed."""
+def test_format_full_dto_no_private_properties() -> None:
+    """DTO with private properties — only gets is_dto flag, no property listing."""
     syms = [
         _sym("Service", kind="class"),
         _sym("_cache", kind="property", sig="private Dictionary _cache", visibility="private", parent="Service"),
@@ -231,9 +232,8 @@ def test_format_full_private_property_excluded() -> None:
     result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
     assert result is not None
     cls = result["symbols"][0]
-    props = cls.get("properties", "")
-    assert "Name" in props
-    assert "_cache" not in props
+    assert cls["is_dto"] is True
+    assert "properties" not in cls
 
 
 def test_format_full_top_level_function_not_nested_under_class() -> None:
@@ -249,6 +249,58 @@ def test_format_full_top_level_function_not_nested_under_class() -> None:
     assert "MyClass" in names
     assert "standaloneFunc" in names
     assert "innerMethod" not in names  # belongs to class, not top-level
+
+
+# ── _slim_symbol ──────────────────────────────────────────────────────────────
+
+# ── _parse_constructor_deps ───────────────────────────────────────────────────
+
+def test_parse_constructor_deps_extracts_types() -> None:
+    deps = _parse_constructor_deps("public OrderService(IRepository repo, ILogger logger)")
+    assert deps == ["IRepository", "ILogger"]
+
+
+def test_parse_constructor_deps_skips_primitives() -> None:
+    deps = _parse_constructor_deps("public Worker(IService svc, string name, int retries)")
+    assert "IService" in deps
+    assert "string" not in deps
+    assert "int" not in deps
+
+
+def test_parse_constructor_deps_handles_generics() -> None:
+    deps = _parse_constructor_deps("public Svc(ILogger<Worker> logger, IOptions<Config> opts)")
+    assert "ILogger<Worker>" in deps
+    assert "IOptions<Config>" in deps
+
+
+def test_parse_constructor_deps_empty_params() -> None:
+    assert _parse_constructor_deps("public Foo()") == []
+
+
+def test_parse_constructor_deps_no_parens() -> None:
+    assert _parse_constructor_deps("broken") == []
+
+
+# ── _format_full — implements ────────────────────────────────────────────────
+
+def test_format_full_class_with_implements() -> None:
+    syms = [
+        SymbolInfo(name="SqlRepo", kind="class", visibility="public", signature="public class SqlRepo",
+                   implements=["IRepository", "IDisposable"]),
+        _sym("Save", kind="method", sig="public void Save()", parent="SqlRepo"),
+    ]
+    result = _format_full("src/SqlRepo.cs", "new", _analysis("src/SqlRepo.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert cls["implements"] == ["IRepository", "IDisposable"]
+
+
+def test_format_full_class_without_implements_has_no_key() -> None:
+    syms = [_sym("Simple", kind="class")]
+    result = _format_full("src/Simple.cs", "new", _analysis("src/Simple.cs", "c_sharp", syms))
+    assert result is not None
+    cls = result["symbols"][0]
+    assert "implements" not in cls
 
 
 # ── _slim_symbol ──────────────────────────────────────────────────────────────

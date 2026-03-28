@@ -74,17 +74,49 @@ def _is_minified(analysis: FileAnalysis) -> bool:
     return (short / len(public_syms)) > _MINIFIED_SHORT_NAME_THRESHOLD
 
 
-_MAX_METHODS_PER_SYMBOL = 15
-_MAX_SYMBOLS_PER_FILE = 25
-_MAX_PROPERTIES_PER_CLASS = 8
+_MAX_METHODS_PER_SYMBOL = 10
+_MAX_SYMBOLS_PER_FILE = 10
 
 _MEMBER_CONTAINER_KINDS = frozenset({"class", "interface", "struct"})
 
 
-def _extract_property_type_name(sig: str) -> str:
-    """Extract 'Type Name' from a property signature like 'public Type Name'."""
-    parts = sig.split(" ", 1)
-    return parts[1] if len(parts) > 1 else sig
+_PRIMITIVE_TYPES = frozenset({
+    "string", "int", "long", "float", "double", "bool", "boolean",
+    "byte", "char", "decimal", "short", "uint", "ulong", "ushort",
+    "object", "void", "number", "any", "str", "None",
+})
+
+
+def _parse_constructor_deps(sig: str) -> list[str]:
+    """Extract dependency type names from a constructor signature.
+
+    "(IRepo repo, ILogger<Worker> logger, string name)" → ["IRepo", "ILogger<Worker>"]
+
+    Skips primitive types (string, int, bool...) — those are config values, not DI deps.
+    """
+    open_p = sig.find("(")
+    close_p = sig.rfind(")")
+    if open_p == -1 or close_p == -1:
+        return []
+    inner = sig[open_p + 1:close_p].strip()
+    if not inner:
+        return []
+    deps = []
+    for param in inner.split(","):
+        param = param.strip()
+        if not param:
+            continue
+        # "Type name" or "Type<Generic> name" — take everything except the last token
+        parts = param.rsplit(None, 1)
+        if len(parts) == 2:
+            type_name = parts[0].strip()
+        else:
+            type_name = param.strip()
+        # Strip primitive types
+        base_type = type_name.split("<")[0].split("[")[0].strip()
+        if base_type.lower() not in _PRIMITIVE_TYPES:
+            deps.append(type_name)
+    return deps
 
 
 def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
@@ -95,9 +127,8 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
 
     Caps applied:
     - Methods per class/interface/struct: _MAX_METHODS_PER_SYMBOL
-    - Properties per class/struct: _MAX_PROPERTIES_PER_CLASS
     - Symbols per file: _MAX_SYMBOLS_PER_FILE
-    total_methods / total_properties / total_symbols are added when truncated.
+    total_methods / total_symbols are added when truncated.
     """
     if _is_minified(analysis):
         return None
@@ -113,37 +144,34 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
                 "signature": sym.signature,
             }
 
-            # Constructor — only if it has parameters (reveals DI dependencies)
+            # Implements — interface→impl relationships
+            if sym.implements:
+                entry["implements"] = sym.implements
+
+            # Constructor deps — first-class, parsed as type list
             constructor = next(
                 (s for s in analysis.symbols
                  if s.parent == sym.name and s.kind == "constructor" and _is_public(s)),
                 None,
             )
             if constructor and constructor.signature:
-                sig = constructor.signature
-                open_p = sig.find("(")
-                close_p = sig.rfind(")")
-                if open_p != -1 and close_p != -1 and sig[open_p + 1:close_p].strip():
-                    entry["constructor"] = sig[open_p:]  # "(Type param, ...)"
+                deps = _parse_constructor_deps(constructor.signature)
+                if deps:
+                    entry["constructor_deps"] = deps
 
-            # Methods (capped)
+            # Methods — full signatures, capped
             all_methods = [
-                s.name for s in analysis.symbols
+                s.signature or s.name
+                for s in analysis.symbols
                 if s.parent == sym.name and s.kind == "method" and _is_public(s)
             ]
             entry["methods"] = all_methods[:_MAX_METHODS_PER_SYMBOL]
             if len(all_methods) > _MAX_METHODS_PER_SYMBOL:
                 entry["total_methods"] = len(all_methods)
 
-            # Properties — only for DTO-like classes (no methods); inline, no cap
+            # DTO detection — classes/structs with no methods get is_dto tag, no properties
             if sym.kind in ("class", "struct") and not all_methods:
-                all_props = [
-                    _extract_property_type_name(s.signature or s.name)
-                    for s in analysis.symbols
-                    if s.parent == sym.name and s.kind == "property" and _is_public(s)
-                ]
-                if all_props:
-                    entry["properties"] = ", ".join(all_props)
+                entry["is_dto"] = True
 
             if sym.decorators:
                 entry["decorators"] = sym.decorators

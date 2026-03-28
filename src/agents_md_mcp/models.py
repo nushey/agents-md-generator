@@ -28,6 +28,7 @@ class SymbolInfo(BaseModel):
     visibility: Optional[str] = None
     signature: Optional[str] = None
     decorators: list[str] = Field(default_factory=list)
+    implements: list[str] = Field(default_factory=list)
     parent: Optional[str] = None
     line_start: int = 0
     line_end: int = 0
@@ -64,6 +65,7 @@ class CachedSymbol(BaseModel):
     visibility: Optional[str] = None
     signature: Optional[str] = None
     decorators: list[str] = Field(default_factory=list)
+    implements: list[str] = Field(default_factory=list)
 
 
 class CachedFile(BaseModel):

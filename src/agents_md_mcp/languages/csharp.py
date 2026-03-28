@@ -62,16 +62,66 @@ def _extract_visibility(
 
 
 def _extract_attributes(node: Node, source: bytes) -> list[str]:
-    """Collect [Attribute] names from attribute_list nodes."""
+    """Collect [Attribute(args)] from attribute_list nodes.
+
+    Includes arguments when present to enable downstream wiring detection:
+    [HttpGet("api/orders")] → 'HttpGet("api/orders")'
+    [Authorize]             → 'Authorize'
+
+    Tree-sitter C# grammar: attribute → identifier (name) + attribute_argument_list.
+    The name node is the first identifier child (not a field), and the args are an
+    attribute_argument_list child node.
+    """
     attrs = []
     for child in node.children:
         if child.type == "attribute_list":
             for attr in child.children:
                 if attr.type == "attribute":
-                    name_node = attr.child_by_field_name("name")
-                    if name_node:
-                        attrs.append(_node_text(name_node, source))
+                    # Name is the first identifier/qualified_name child
+                    name_node = None
+                    args_node = None
+                    for ac in attr.children:
+                        if ac.type in ("identifier", "qualified_name", "generic_name") and name_node is None:
+                            name_node = ac
+                        elif ac.type == "attribute_argument_list":
+                            args_node = ac
+                    if not name_node:
+                        continue
+                    name = _node_text(name_node, source)
+                    if args_node:
+                        args_text = _node_text(args_node, source).strip()
+                        if args_text and args_text != "()":
+                            attrs.append(f"{name}{args_text}")
+                            continue
+                    attrs.append(name)
     return attrs
+
+
+def _extract_implements(node: Node, source: bytes) -> list[str]:
+    """Extract base types (interfaces/classes) from a class/struct declaration.
+
+    C# base_list: `class Foo : IBar, IBaz, BaseClass` → ["IBar", "IBaz", "BaseClass"]
+
+    The tree-sitter C# grammar uses a `base_list` child node (not a field),
+    containing identifier / generic_name children separated by commas.
+    """
+    base_list = None
+    for child in node.children:
+        if child.type == "base_list":
+            base_list = child
+            break
+    if not base_list:
+        return []
+    result = []
+    for child in base_list.children:
+        if child.type in (
+            "identifier", "generic_name", "qualified_name",
+            "predefined_type", "nullable_type",
+        ):
+            name = _node_text(child, source).strip()
+            if name:
+                result.append(name)
+    return result
 
 
 def _build_cs_signature(node: Node, source: bytes, kind: str, name: str, visibility: str) -> str:
@@ -156,12 +206,14 @@ class CSharpAnalyzer(LanguageAnalyzer):
                     is_nested=parent_class is not None,
                 )
                 attributes = _extract_attributes(node, source)
+                implements = _extract_implements(node, source) if kind in ("class", "struct") else []
                 symbols.append(SymbolInfo(
                     name=name,
                     kind=kind,  # type: ignore[arg-type]
                     visibility=visibility,
                     signature=_build_cs_signature(node, source, kind, name, visibility),
                     decorators=attributes,
+                    implements=implements,
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,
                     line_end=node.end_point[0] + 1,

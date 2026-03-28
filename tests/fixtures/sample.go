@@ -5,8 +5,19 @@ import (
 	"net/http"
 )
 
+type IOrderRepo interface {
+	FindAll() ([]*Order, error)
+	FindByID(id int) (*Order, error)
+	Save(order *Order) error
+}
+
 type OrderService struct {
 	db *DB
+}
+
+type Config struct {
+	Host string `json:"host" yaml:"host"`
+	Port int    `json:"port" yaml:"port" validate:"required"`
 }
 
 func NewOrderService(db *DB) *OrderService {

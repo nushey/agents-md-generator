@@ -347,6 +347,45 @@ def test_go_imports() -> None:
     assert any("fmt" in imp for imp in result.imports)
 
 
+def test_go_struct_tags_as_decorators() -> None:
+    """Struct with field tags gets tag keys as decorators."""
+    src = (FIXTURES / "sample.go").read_bytes()
+    result = GoAnalyzer().analyze(Path("sample.go"), src)
+
+    config = _by_name(result, "Config")
+    assert config.kind == "struct"
+    assert len(config.decorators) == 1
+    tag_entry = config.decorators[0]
+    assert "json" in tag_entry
+    assert "yaml" in tag_entry
+    assert "validate" in tag_entry
+
+
+def test_go_struct_without_tags_has_no_decorators() -> None:
+    src = (FIXTURES / "sample.go").read_bytes()
+    result = GoAnalyzer().analyze(Path("sample.go"), src)
+
+    order_svc = _by_name(result, "OrderService")
+    assert order_svc.decorators == []
+
+
+def test_go_interface_methods_extracted() -> None:
+    """Interface methods are extracted as child symbols."""
+    src = (FIXTURES / "sample.go").read_bytes()
+    result = GoAnalyzer().analyze(Path("sample.go"), src)
+
+    assert "IOrderRepo" in _names(result)
+    interface_methods = [s for s in result.symbols if s.parent == "IOrderRepo"]
+    method_names = {s.name for s in interface_methods}
+    assert "FindAll" in method_names
+    assert "FindByID" in method_names
+    assert "Save" in method_names
+
+    find_by_id = next(s for s in interface_methods if s.name == "FindByID")
+    assert "id int" in (find_by_id.signature or "")
+    assert "*Order" in (find_by_id.signature or "")
+
+
 # ── diff_analysis ─────────────────────────────────────────────────────────────
 
 def _make_symbol(name: str, sig: str = "sig") -> SymbolInfo:

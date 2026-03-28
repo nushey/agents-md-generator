@@ -53,10 +53,10 @@ Elimina decoradores que no aportan señal arquitectónica. Se filtran por prefij
 ### Detección de archivos de baja entropía (`_is_low_entropy`)
 
 Identifica archivos que contienen exclusivamente estructuras de datos (DTOs, Entidades) sin lógica. La heurística:
-- El archivo tiene al menos 3 clases/structs públicos.
+- El archivo tiene al menos 1 clase/struct público.
 - El 100% de las clases/structs tienen cero métodos públicos.
 
-Si un archivo cumple esto, se devuelve un resumen minificado en `full_analysis` en lugar de listar cada símbolo individualmente.
+Si un archivo cumple esto, se devuelve un resumen minificado en `full_analysis` en lugar de listar cada símbolo individualmente. Esto captura el caso más común en proyectos C#: archivos con una única clase DTO sin métodos.
 
 ### Formateo para el payload
 

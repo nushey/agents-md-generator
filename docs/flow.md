@@ -131,9 +131,11 @@ Para cada `FileChange`:
 
 ### Agregación de directorios
 
-Los archivos de producción pasan por `aggregator._aggregate_by_directory`.
-- Directorios con ≥ N archivos del mismo lenguaje que comparten métodos comunes se colapsan en un `directory_summary`.
-- Directorios compuestos íntegramente por resúmenes minificados de DTOs se colapsan en un resumen semántico que indica la cantidad de clases de datos detectadas.
+Los archivos de producción pasan por `aggregator._aggregate_by_directory`. Todo directorio que supera el threshold de agregación se colapsa en algún tipo de `directory_summary` — nunca queda como entradas individuales sin acotar:
+
+- **Patrón de métodos comunes**: si ≥ 2 firmas de métodos aparecen en ≥ 60% de los archivos con cobertura ≥ 40%, se genera un summary con `common_methods`, `outliers` y `naming_pattern`.
+- **Directorio DTO**: si ≥ 80% de los archivos son clases sin métodos (o todos fueron minificados como `dto_container`), se genera un resumen semántico DTO.
+- **Fallback genérico**: directorios que no matchean ningún patrón se colapsan igualmente con `sample_files` y `naming_pattern` si existe. Esto evita que directorios grandes sin patrón detectable inflen el payload.
 
 ### El payload final
 

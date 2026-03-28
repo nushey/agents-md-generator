@@ -6,6 +6,7 @@ from pathlib import Path
 from .change_detector import _is_excluded
 from .config import EXTENSION_TO_LANGUAGE, ProjectConfig
 from .gitignore import is_gitignored, load_gitignore_spec
+from .models import FileAnalysis
 from .path_utils import rel_posix
 from .symbol_utils import _is_test_file
 
@@ -267,3 +268,243 @@ def _detect_entry_points(root: Path, config: ProjectConfig) -> list[dict]:
         pass
 
     return sorted(entries, key=lambda e: e["file"])
+
+
+# ── Wiring detection ─────────────────────────────────────────────────────────
+
+# HTTP method decorators per language
+_CS_HTTP_METHODS = {"HttpGet": "GET", "HttpPost": "POST", "HttpPut": "PUT", "HttpDelete": "DELETE", "HttpPatch": "PATCH"}
+_TS_HTTP_METHODS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH"}
+_PY_HTTP_METHODS = {"get": "GET", "post": "POST", "put": "PUT", "delete": "DELETE", "patch": "PATCH", "route": "ANY"}
+
+_ROUTE_ARG_RE = re.compile(r"""\(\s*['"](.+?)['"]\s*\)""")
+
+_MAX_ROUTE_CONTROLLERS = 10
+_MAX_ROUTES_PER_CONTROLLER = 5
+_MAX_GO_HANDLERS = 5
+
+
+def _extract_route_arg(decorator_text: str) -> str | None:
+    """Extract the route path from a decorator string like Controller('/api/users')."""
+    m = _ROUTE_ARG_RE.search(decorator_text)
+    return m.group(1) if m else None
+
+
+def _cap_routes(routes: list[dict], cap: int) -> list[dict]:
+    """Select up to `cap` routes, prioritising one of each HTTP method first.
+
+    Strategy: pick one representative per unique HTTP method, then fill remaining
+    slots from whichever method has extras — gives a complete picture of the
+    controller's surface without dumping every endpoint.
+    """
+    if len(routes) <= cap:
+        return routes
+
+    by_method: dict[str, list[dict]] = {}
+    for r in routes:
+        by_method.setdefault(r.get("method", "ANY"), []).append(r)
+
+    selected: list[dict] = []
+    seen: set[int] = set()
+
+    # Phase 1: one of each method type
+    for method, method_routes in by_method.items():
+        if len(selected) >= cap:
+            break
+        idx = id(method_routes[0])
+        selected.append(method_routes[0])
+        seen.add(idx)
+
+    # Phase 2: fill remaining slots round-robin from methods with extras
+    remaining = cap - len(selected)
+    if remaining > 0:
+        extras = [r for r in routes if id(r) not in seen]
+        selected.extend(extras[:remaining])
+
+    return selected
+
+
+def _detect_wiring(analyses: dict[str, FileAnalysis]) -> dict:
+    """Post-process parsed FileAnalysis objects to extract wiring information.
+
+    Detects route maps for all languages. Applies caps:
+    - Max 10 controllers/files in route_map
+    - Max 5 routes per controller (one of each HTTP method first, then fill)
+    - Max 5 Go handlers per file
+    """
+    route_map: list[dict] = []
+
+    for path, analysis in analyses.items():
+        lang = analysis.language
+
+        if lang == "c_sharp":
+            _detect_csharp_routes(path, analysis, route_map)
+        elif lang in ("typescript", "tsx", "javascript"):
+            _detect_ts_routes(path, analysis, route_map)
+        elif lang == "python":
+            _detect_python_routes(path, analysis, route_map)
+        elif lang == "go":
+            _detect_go_routes(path, analysis, route_map)
+
+    # Apply caps
+    for entry in route_map:
+        if "routes" in entry:
+            all_routes = entry["routes"]
+            entry["routes"] = _cap_routes(all_routes, _MAX_ROUTES_PER_CONTROLLER)
+            if len(all_routes) > _MAX_ROUTES_PER_CONTROLLER:
+                entry["total_routes"] = len(all_routes)
+        if "handlers" in entry:
+            all_handlers = entry["handlers"]
+            entry["handlers"] = all_handlers[:_MAX_GO_HANDLERS]
+            if len(all_handlers) > _MAX_GO_HANDLERS:
+                entry["total_handlers"] = len(all_handlers)
+
+    total_controllers = len(route_map)
+    if total_controllers > _MAX_ROUTE_CONTROLLERS:
+        route_map = route_map[:_MAX_ROUTE_CONTROLLERS]
+
+    result: dict = {}
+    if route_map:
+        result["route_map"] = route_map
+        if total_controllers > _MAX_ROUTE_CONTROLLERS:
+            result["total_route_files"] = total_controllers
+    return result
+
+
+def _detect_csharp_routes(
+    path: str, analysis: FileAnalysis, route_map: list[dict],
+) -> None:
+    """Detect ASP.NET controller routes from [Route], [HttpGet], etc. decorators."""
+    # Find controller classes
+    for sym in analysis.symbols:
+        if sym.kind != "class":
+            continue
+        is_controller = any(
+            d in ("ApiController", "Controller") or d.startswith("Route(")
+            for d in sym.decorators
+        )
+        if not is_controller:
+            continue
+
+        # Extract class-level route prefix
+        prefix = ""
+        for d in sym.decorators:
+            if d.startswith("Route("):
+                arg = _extract_route_arg(d)
+                if arg:
+                    prefix = arg.rstrip("/")
+                    break
+
+        # Extract method-level routes
+        routes: list[dict] = []
+        for method_sym in analysis.symbols:
+            if method_sym.parent != sym.name or method_sym.kind != "method":
+                continue
+            for dec in method_sym.decorators:
+                for cs_attr, http_method in _CS_HTTP_METHODS.items():
+                    if dec == cs_attr or dec.startswith(f"{cs_attr}("):
+                        method_path = _extract_route_arg(dec) or ""
+                        full_path = f"{prefix}/{method_path}".strip("/") if prefix else method_path
+                        routes.append({
+                            "method": http_method,
+                            "path": full_path,
+                            "handler": method_sym.name,
+                        })
+                        break
+
+        if routes:
+            route_map.append({"file": path, "class": sym.name, "routes": routes})
+
+
+def _detect_ts_routes(
+    path: str, analysis: FileAnalysis, route_map: list[dict],
+) -> None:
+    """Detect NestJS-style @Controller/@Get/@Post routes."""
+    for sym in analysis.symbols:
+        if sym.kind != "class":
+            continue
+        # Find @Controller('/path') decorator
+        prefix = ""
+        is_controller = False
+        for d in sym.decorators:
+            if d.startswith("Controller(") or d == "Controller()":
+                is_controller = True
+                arg = _extract_route_arg(d)
+                if arg:
+                    prefix = arg.strip("/")
+                break
+
+        if not is_controller:
+            continue
+
+        routes: list[dict] = []
+        for method_sym in analysis.symbols:
+            if method_sym.parent != sym.name or method_sym.kind != "method":
+                continue
+            for dec in method_sym.decorators:
+                for ts_dec, http_method in _TS_HTTP_METHODS.items():
+                    if dec == f"{ts_dec}()" or dec.startswith(f"{ts_dec}("):
+                        method_path = _extract_route_arg(dec) or ""
+                        full_path = f"{prefix}/{method_path}".strip("/") if prefix else method_path
+                        routes.append({
+                            "method": http_method,
+                            "path": full_path,
+                            "handler": method_sym.name,
+                        })
+                        break
+
+        if routes:
+            route_map.append({"file": path, "class": sym.name, "routes": routes})
+
+
+def _detect_python_routes(
+    path: str, analysis: FileAnalysis, route_map: list[dict],
+) -> None:
+    """Detect FastAPI/Flask route decorators like @app.get('/path')."""
+    routes: list[dict] = []
+    for sym in analysis.symbols:
+        if sym.kind not in ("method", "function"):
+            continue
+        for dec in sym.decorators:
+            # Match patterns like app.get('/path'), router.post('/path'), app.route('/path')
+            for py_suffix, http_method in _PY_HTTP_METHODS.items():
+                if f".{py_suffix}(" in dec:
+                    route_path = _extract_route_arg(dec) or ""
+                    routes.append({
+                        "method": http_method,
+                        "path": route_path,
+                        "handler": sym.name,
+                    })
+                    break
+
+    if routes:
+        route_map.append({"file": path, "routes": routes})
+
+
+def _detect_go_routes(
+    path: str, analysis: FileAnalysis, route_map: list[dict],
+) -> None:
+    """Detect Go HTTP route registrations from imports and handler function signatures.
+
+    Looks for functions matching common handler signatures:
+    - net/http: func(w http.ResponseWriter, r *http.Request)
+    - gin: func(c *gin.Context)
+    - echo: func(c echo.Context)
+    """
+    _GO_HANDLER_PATTERNS = [
+        re.compile(r"http\.ResponseWriter"),
+        re.compile(r"\*gin\.Context"),
+        re.compile(r"echo\.Context"),
+    ]
+
+    handlers: list[dict] = []
+    for sym in analysis.symbols:
+        if sym.kind not in ("function", "method") or not sym.signature:
+            continue
+        for pattern in _GO_HANDLER_PATTERNS:
+            if pattern.search(sym.signature):
+                handlers.append({"handler": sym.name})
+                break
+
+    if handlers:
+        route_map.append({"file": path, "handlers": handlers})

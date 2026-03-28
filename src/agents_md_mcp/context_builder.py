@@ -10,7 +10,7 @@ from .cache import CacheData
 from .config import ProjectConfig
 from .instructions import _build_instructions
 from .models import FileAnalysis, FileChange
-from .project_scanner import _detect_entry_points, _detect_env_vars, _scan_project_structure
+from .project_scanner import _detect_entry_points, _detect_env_vars, _detect_wiring, _scan_project_structure
 from .symbol_utils import (
     _THRESHOLD_ORDER,
     _format_full,
@@ -155,8 +155,9 @@ def build_payload(
 
     env_vars = _detect_env_vars(root, config)
     entry_points = _detect_entry_points(root, config)
+    wiring = _detect_wiring(new_analyses)
 
-    return {
+    payload: dict = {
         "metadata": {
             "project_name": project_name,
             "languages_detected": list({a.language for a in new_analyses.values()}),
@@ -170,3 +171,6 @@ def build_payload(
         "existing_agents_md": existing_agents_md,
         "instructions": _build_instructions(existing_agents_md is not None),
     }
+    if wiring:
+        payload["wiring"] = wiring
+    return payload

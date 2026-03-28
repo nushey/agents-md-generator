@@ -10,7 +10,7 @@ from agents_md_mcp.config import load_config
 from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern, _is_dto_directory
 from agents_md_mcp.build_system import _detect_build_systems
 from agents_md_mcp.context_builder import build_payload
-from agents_md_mcp.project_scanner import _scan_project_structure
+from agents_md_mcp.project_scanner import _detect_wiring, _cap_routes, _scan_project_structure
 from agents_md_mcp.symbol_utils import _passes_threshold
 from agents_md_mcp.models import CachedFile, FileAnalysis, FileChange, SymbolInfo
 
@@ -542,3 +542,179 @@ def test_aggregate_dto_below_threshold_keeps_individual() -> None:
     entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(4)]
     result = _aggregate_by_directory(entries, threshold=8)
     assert all(e.get("kind") != "directory_summary" for e in result)
+
+
+# ── _detect_wiring: route detection ──────────────────────────────────────────
+
+def _make_analysis(path: str, language: str, symbols: list[SymbolInfo]) -> FileAnalysis:
+    return FileAnalysis(path=path, language=language, symbols=symbols)
+
+
+def test_wiring_csharp_routes() -> None:
+    """C# controller with [Route] + [HttpGet/Post] → route_map."""
+    symbols = [
+        SymbolInfo(name="OrderController", kind="class", decorators=['ApiController', 'Route("api/orders")']),
+        SymbolInfo(name="GetAll", kind="method", parent="OrderController", decorators=["HttpGet"]),
+        SymbolInfo(name="Create", kind="method", parent="OrderController", decorators=["HttpPost"]),
+        SymbolInfo(name="GetById", kind="method", parent="OrderController", decorators=['HttpGet("{id}")']),
+    ]
+    analyses = {"Controllers/OrderController.cs": _make_analysis("Controllers/OrderController.cs", "c_sharp", symbols)}
+    result = _detect_wiring(analyses)
+
+    assert "route_map" in result
+    entry = result["route_map"][0]
+    assert entry["class"] == "OrderController"
+    routes = entry["routes"]
+    methods = {r["method"] for r in routes}
+    assert "GET" in methods
+    assert "POST" in methods
+    assert any("api/orders" in r["path"] for r in routes)
+
+
+def test_wiring_typescript_nestjs_routes() -> None:
+    """NestJS @Controller + @Get/@Post → route_map."""
+    symbols = [
+        SymbolInfo(name="UserController", kind="class", decorators=["Controller('/api/users')"]),
+        SymbolInfo(name="findAll", kind="method", parent="UserController", decorators=["Get()"]),
+        SymbolInfo(name="create", kind="method", parent="UserController", decorators=["Post()"]),
+        SymbolInfo(name="findOne", kind="method", parent="UserController", decorators=["Get(':id')"]),
+    ]
+    analyses = {"src/user.controller.ts": _make_analysis("src/user.controller.ts", "typescript", symbols)}
+    result = _detect_wiring(analyses)
+
+    assert "route_map" in result
+    entry = result["route_map"][0]
+    assert entry["class"] == "UserController"
+    methods = {r["method"] for r in entry["routes"]}
+    assert "GET" in methods
+    assert "POST" in methods
+
+
+def test_wiring_python_fastapi_routes() -> None:
+    """FastAPI @app.get/@router.post → route_map."""
+    symbols = [
+        SymbolInfo(name="list_users", kind="function", decorators=["app.get('/users')"]),
+        SymbolInfo(name="create_user", kind="function", decorators=["app.post('/users')"]),
+        SymbolInfo(name="get_user", kind="function", decorators=["app.get('/users/{id}')"]),
+    ]
+    analyses = {"src/routes.py": _make_analysis("src/routes.py", "python", symbols)}
+    result = _detect_wiring(analyses)
+
+    assert "route_map" in result
+    entry = result["route_map"][0]
+    assert entry["file"] == "src/routes.py"
+    methods = {r["method"] for r in entry["routes"]}
+    assert "GET" in methods
+    assert "POST" in methods
+    assert any("/users" in r["path"] for r in entry["routes"])
+
+
+def test_wiring_go_handlers() -> None:
+    """Go functions with http.ResponseWriter or *gin.Context → handlers."""
+    symbols = [
+        SymbolInfo(name="HealthCheck", kind="function", signature="func HealthCheck(w http.ResponseWriter, r *http.Request)"),
+        SymbolInfo(name="GetOrder", kind="method", parent="OrderHandler", signature="func (h *OrderHandler) GetOrder(c *gin.Context)"),
+        SymbolInfo(name="helperFunc", kind="function", signature="func helperFunc(x int)"),
+    ]
+    analyses = {"handlers.go": _make_analysis("handlers.go", "go", symbols)}
+    result = _detect_wiring(analyses)
+
+    assert "route_map" in result
+    handlers = result["route_map"][0]["handlers"]
+    handler_names = {h["handler"] for h in handlers}
+    assert "HealthCheck" in handler_names
+    assert "GetOrder" in handler_names
+    assert "helperFunc" not in handler_names
+
+
+def test_wiring_no_routes_returns_empty() -> None:
+    """Files with no route indicators → empty result."""
+    symbols = [
+        SymbolInfo(name="UserService", kind="class"),
+        SymbolInfo(name="getUser", kind="method", parent="UserService"),
+    ]
+    analyses = {"src/service.ts": _make_analysis("src/service.ts", "typescript", symbols)}
+    result = _detect_wiring(analyses)
+    assert result == {}
+
+
+# ── _cap_routes ──────────────────────────────────────────────────────────────
+
+def test_cap_routes_below_limit_unchanged() -> None:
+    routes = [
+        {"method": "GET", "path": "/a", "handler": "a"},
+        {"method": "POST", "path": "/b", "handler": "b"},
+    ]
+    assert _cap_routes(routes, 5) == routes
+
+
+def test_cap_routes_one_per_method_first() -> None:
+    """With 8 routes (5 GET, 2 POST, 1 DELETE) and cap=5, get one of each method + extras."""
+    routes = [
+        {"method": "GET", "path": "/g1", "handler": "g1"},
+        {"method": "GET", "path": "/g2", "handler": "g2"},
+        {"method": "GET", "path": "/g3", "handler": "g3"},
+        {"method": "GET", "path": "/g4", "handler": "g4"},
+        {"method": "GET", "path": "/g5", "handler": "g5"},
+        {"method": "POST", "path": "/p1", "handler": "p1"},
+        {"method": "POST", "path": "/p2", "handler": "p2"},
+        {"method": "DELETE", "path": "/d1", "handler": "d1"},
+    ]
+    result = _cap_routes(routes, 5)
+    assert len(result) == 5
+
+    methods = {r["method"] for r in result}
+    # All three method types must be represented
+    assert "GET" in methods
+    assert "POST" in methods
+    assert "DELETE" in methods
+
+
+def test_cap_routes_fills_remaining_slots() -> None:
+    """When only 2 method types exist, remaining slots go to extras."""
+    routes = [
+        {"method": "GET", "path": "/g1", "handler": "g1"},
+        {"method": "GET", "path": "/g2", "handler": "g2"},
+        {"method": "GET", "path": "/g3", "handler": "g3"},
+        {"method": "POST", "path": "/p1", "handler": "p1"},
+    ]
+    result = _cap_routes(routes, 3)
+    assert len(result) == 3
+    methods = {r["method"] for r in result}
+    assert "GET" in methods
+    assert "POST" in methods
+
+
+def test_wiring_caps_controllers_at_10() -> None:
+    """More than 10 controllers → capped with total_route_files count."""
+    analyses = {}
+    for i in range(15):
+        symbols = [
+            SymbolInfo(name=f"Ctrl{i}", kind="class", decorators=["Controller()"]),
+            SymbolInfo(name="index", kind="method", parent=f"Ctrl{i}", decorators=["Get()"]),
+        ]
+        analyses[f"ctrl{i}.ts"] = _make_analysis(f"ctrl{i}.ts", "typescript", symbols)
+
+    result = _detect_wiring(analyses)
+    assert len(result["route_map"]) == 10
+    assert result["total_route_files"] == 15
+
+
+def test_wiring_caps_routes_per_controller() -> None:
+    """Controller with 12 routes → capped at 5 with total_routes count."""
+    symbols = [SymbolInfo(name="BigCtrl", kind="class", decorators=["Controller('/api')"])]
+    for i in range(12):
+        method = ["Get", "Post", "Put", "Delete", "Patch"][i % 5]
+        symbols.append(SymbolInfo(
+            name=f"action{i}", kind="method", parent="BigCtrl",
+            decorators=[f"{method}('/r{i}')"],
+        ))
+    analyses = {"big.ts": _make_analysis("big.ts", "typescript", symbols)}
+    result = _detect_wiring(analyses)
+
+    entry = result["route_map"][0]
+    assert len(entry["routes"]) == 5
+    assert entry["total_routes"] == 12
+    # All method types should be represented
+    methods = {r["method"] for r in entry["routes"]}
+    assert len(methods) == 5

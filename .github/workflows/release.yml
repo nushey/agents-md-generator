@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate changelog
+        if: steps.check_tag.outputs.exists == 'false'
+        id: changelog
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          # Find previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # Generate changelog from conventional commits
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            # Features
+            FEATS=$(git log "$RANGE" --pretty=format:"%s" | grep -E "^feat:" | sed 's/^feat: //' || true)
+            if [ -n "$FEATS" ]; then
+              echo "### Features"
+              echo "$FEATS" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            # Fixes
+            FIXES=$(git log "$RANGE" --pretty=format:"%s" | grep -E "^fix:" | sed 's/^fix: //' || true)
+            if [ -n "$FIXES" ]; then
+              echo "### Fixes"
+              echo "$FIXES" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            # Refactors
+            REFACTORS=$(git log "$RANGE" --pretty=format:"%s" | grep -E "^refactor:" | sed 's/^refactor: //' || true)
+            if [ -n "$REFACTORS" ]; then
+              echo "### Refactors"
+              echo "$REFACTORS" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            # Tests
+            TESTS=$(git log "$RANGE" --pretty=format:"%s" | grep -E "^test:" | sed 's/^test: //' || true)
+            if [ -n "$TESTS" ]; then
+              echo "### Tests"
+              echo "$TESTS" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "${{ steps.changelog.outputs.changelog }}"

@@ -23,6 +23,7 @@ _BUILD_MARKERS: dict[str, list[str]] = {
 def _detect_build_systems(root: Path) -> dict:
     detected = []
     package_files = []
+    detected_extras: dict = {}
 
     for system, markers in _BUILD_MARKERS.items():
         for marker in markers:
@@ -44,6 +45,13 @@ def _detect_build_systems(root: Path) -> dict:
             data = json.loads(pkg_json.read_text(encoding="utf-8"))
             if "scripts" in data:
                 scripts["npm"] = data["scripts"]
+            # Extract dependency names (no versions)
+            npm_packages = sorted({
+                *data.get("dependencies", {}).keys(),
+                *data.get("devDependencies", {}).keys(),
+            })
+            if npm_packages:
+                detected_extras["npm_packages"] = npm_packages
             # Detect package manager
             if "packageManager" in data:
                 pm = data["packageManager"].split("@")[0]
@@ -83,12 +91,17 @@ def _detect_build_systems(root: Path) -> dict:
             for name, target in project_scripts.items():
                 py_scripts[name] = f"{runner} {name}" if runner != "python" else name
 
-            # Detect test runner from dependencies
+            # Extract dependency names (no versions)
             all_deps = (
                 toml.get("project", {}).get("dependencies", [])
                 + [d for deps in toml.get("project", {}).get("optional-dependencies", {}).values() for d in deps]
             )
-            dep_names = [d.split(">=")[0].split("==")[0].split("[")[0].strip().lower() for d in all_deps]
+            dep_names = [d.split(">=")[0].split("==")[0].split("[")[0].split("<")[0].split("~")[0].split("!")[0].strip().lower() for d in all_deps]
+            python_packages = sorted(set(dep_names))
+            if python_packages:
+                detected_extras["python_packages"] = python_packages
+
+            # Detect test runner
             if "pytest" in dep_names:
                 py_scripts["test"] = f"{runner} pytest"
             elif "unittest" in dep_names:
@@ -148,10 +161,8 @@ def _detect_build_systems(root: Path) -> dict:
                 # SDK-style: <PackageReference Include="Name" Version="x" />
                 for ref in _iter_tag(xml_root, "PackageReference"):
                     name = ref.get("Include") or ref.get("include")
-                    ver_el = next(_iter_tag(ref, "Version"), None)
-                    version = ref.get("Version") or ref.get("version") or (ver_el.text.strip() if ver_el is not None and ver_el.text else None)
                     if name:
-                        packages.append(f"{name}@{version}" if version else name)
+                        packages.append(name)
 
                 # Framework-style: <Reference Include="Name"> with <HintPath> (external DLL)
                 if not packages:
@@ -183,5 +194,6 @@ def _detect_build_systems(root: Path) -> dict:
         "detected": detected,
         "package_files": package_files,
         "scripts": scripts,
+        **detected_extras,
         **({"dotnet_projects": dotnet_projects} if dotnet_projects else {}),
     }

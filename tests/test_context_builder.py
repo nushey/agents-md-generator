@@ -127,8 +127,8 @@ def test_dotnet_parses_packages(tmp_path: Path) -> None:
     _write(tmp_path / "App" / "App.csproj", _csproj(packages=pkgs))
     result = _detect_build_systems(tmp_path)
     packages = result["dotnet_projects"][0]["packages"]
-    assert "MediatR@12.0.0" in packages
-    assert "AutoMapper@13.0.1" in packages
+    assert "MediatR" in packages
+    assert "AutoMapper" in packages
 
 
 def test_dotnet_caps_packages_at_15(tmp_path: Path) -> None:

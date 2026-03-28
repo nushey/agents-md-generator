@@ -13,7 +13,6 @@
 - `tests/` — Pytest unit and integration test suite covering the full pipeline.
 - `tests/fixtures/` — Sample source files (`.py`, `.ts`, `.go`, `.cs`) used as AST parsing targets in tests.
 - `docs/` — Project documentation and design notes.
-- `openspec/` — OpenSpec specification and changelog files for the project's design decisions.
 - `.claude/` — Claude Code configuration (settings, hooks).
 
 ### Data flow

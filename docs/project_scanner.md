@@ -11,12 +11,17 @@ Agrupa tres scanners de filesystem que no requieren AST: estructura del proyecto
 Produce un mapa de la organización del proyecto:
 
 - **`root_files`**: archivos visibles en la raíz (hasta 30, sin dotfiles)
-- **`directories`**: por cada directorio, file count y lenguaje dominante (determinado por extensión)
+- **`top_level_dirs`**: subconjunto de `directories` con solo los directorios inmediatos a la raíz (sin `/` en el key)
+- **`directories`**: por cada directorio (hasta profundidad 3), `file_count` y `languages` (lista de lenguajes detectados por extensión, en texto plano ordenado: `"css, html, javascript"`). Directorios más profundos se agregan al ancestro de profundidad 3 acumulando su `file_count`
 - **`config_files_found`**: archivos de configuración de herramientas presentes (`tsconfig.json`, `.eslintrc*`, `pyproject.toml`, `mypy.ini`, etc.)
 - **`ci_files_found`**: archivos de CI detectados (`.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, etc.)
 - **`test_directories`**: directorios de test detectados por nombre (`tests/`, `spec/`, `__tests__/`, `*.Tests/`, etc.)
 
 Todos los archivos pasan por gitignore + exclusiones de config antes de ser contados.
+
+#### Depth cap en `directories`
+
+La constante `_MAX_DIR_DEPTH = 3` limita la profundidad. Un archivo en `src/modules/auth/handlers/middleware/` se acumula en `src/modules/auth/`. Esto evita explosión de entradas en proyectos con jerarquías profundas (de ~10k líneas a ~200–400 entradas útiles).
 
 ### `_detect_env_vars`
 

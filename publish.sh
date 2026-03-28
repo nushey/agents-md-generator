@@ -46,4 +46,18 @@ if ! command -v mcp-publisher &>/dev/null; then
 fi
 mcp-publisher publish
 
+# Git: stage version files, commit, push dev, merge into main
+echo "Committing version bump..."
+git -C "$SCRIPT_DIR" add pyproject.toml server.json
+git -C "$SCRIPT_DIR" commit -m "chore: bump to version $VERSION"
+
+echo "Pushing to dev..."
+git -C "$SCRIPT_DIR" push origin dev
+
+echo "Merging dev into main..."
+git -C "$SCRIPT_DIR" checkout main
+git -C "$SCRIPT_DIR" merge dev --no-edit
+git -C "$SCRIPT_DIR" push origin main
+git -C "$SCRIPT_DIR" checkout dev
+
 echo "Done."

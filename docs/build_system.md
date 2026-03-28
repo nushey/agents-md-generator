@@ -12,7 +12,7 @@ Detecta las herramientas de build presentes en el proyecto y extrae los comandos
 
 | Sistema | Archivos marcadores |
 |---|---|
-| dotnet | `*.sln`, `*.csproj`, `global.json` |
+| dotnet | `*.sln`, `**/*.csproj`, `global.json` |
 | npm | `package.json` |
 | go | `go.mod` |
 | make | `Makefile`, `makefile`, `GNUmakefile` |
@@ -38,6 +38,14 @@ Cada sistema tiene su propia lógica de extracción:
 
 **Make**: parsea el Makefile línea a línea buscando targets (líneas no indentadas que terminan en `:`). Ignora targets que empiezan con `.` o contienen espacios.
 
+**dotnet**: parsea cada `.csproj` encontrado con `xml.etree.ElementTree` (stdlib) y extrae:
+- `target_framework` — valor de `<TargetFramework>` o `<TargetFrameworks>`
+- `output_type` — valor de `<OutputType>` (`Exe`, `Library`, `WinExe`, etc.)
+- `packages` — lista de `<PackageReference>` en formato `"Name@Version"`, capeada en 15
+- `project_references` — lista de paths de `<ProjectReference>` (backslashes normalizados a forward slash)
+
+El campo `dotnet_projects` se omite del output si no hay `.csproj` en el proyecto. La detección usa `**/*.csproj` para encontrar proyectos en subdirectorios.
+
 ### Extensibilidad (OCP implícito)
 
 Para agregar soporte a un nuevo sistema de build, basta con:
@@ -50,4 +58,4 @@ No hay que modificar ningún otro módulo.
 
 | Función | Qué hace |
 |---|---|
-| `_detect_build_systems(root)` | Detecta build tools presentes y extrae sus scripts. Retorna `{"detected": [...], "package_files": [...], "scripts": {...}}` |
+| `_detect_build_systems(root)` | Detecta build tools presentes y extrae sus scripts y metadatos. Retorna `{"detected": [...], "package_files": [...], "scripts": {...}, "dotnet_projects": [...]}` (dotnet_projects solo si hay .csproj) |

@@ -19,16 +19,43 @@ def _node_text(node: Node, source: bytes) -> str:
 
 
 def _get_decorators(node: Node, source: bytes) -> list[str]:
-    """Collect TypeScript decorator names."""
+    """Collect TypeScript decorators with full arguments.
+
+    Preserves: "Injectable()", "Controller('/api/users')", "Get()"
+    """
     decorators = []
     parent = node.parent
     if parent:
         for child in parent.children:
             if child.type == "decorator":
-                call = child.child_by_field_name("expression") or child
-                text = _node_text(call, source).split("(")[0].strip().lstrip("@")
+                text = _node_text(child, source).lstrip("@").strip()
                 decorators.append(text)
     return decorators
+
+
+def _extract_implements(node: Node, source: bytes) -> list[str]:
+    """Extract implemented interfaces from class_heritage → implements_clause."""
+    result = []
+    for child in node.children:
+        if child.type == "class_heritage":
+            for heritage_child in child.children:
+                if heritage_child.type == "implements_clause":
+                    for type_node in heritage_child.children:
+                        if type_node.type in ("type_identifier", "generic_type"):
+                            result.append(_node_text(type_node, source).strip())
+    return result
+
+
+def _extract_extends(node: Node, source: bytes) -> str | None:
+    """Extract the base class name from class_heritage → extends_clause."""
+    for child in node.children:
+        if child.type == "class_heritage":
+            for heritage_child in child.children:
+                if heritage_child.type == "extends_clause":
+                    for type_node in heritage_child.children:
+                        if type_node.type in ("type_identifier", "generic_type", "identifier"):
+                            return _node_text(type_node, source).strip()
+    return None
 
 
 def _infer_visibility(node: Node, source: bytes) -> str:
@@ -103,12 +130,15 @@ class TypeScriptAnalyzer(LanguageAnalyzer):
             name_node = node.child_by_field_name("name")
             if name_node:
                 name = _node_text(name_node, source)
+                extends = _extract_extends(node, source)
+                sig = f"class {name} extends {extends}" if extends else f"class {name}"
                 symbols.append(SymbolInfo(
                     name=name,
                     kind="class",
                     visibility=_infer_visibility(node, source),
-                    signature=f"class {name}",
+                    signature=sig,
                     decorators=_get_decorators(node, source),
+                    implements=_extract_implements(node, source),
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,
                     line_end=node.end_point[0] + 1,
@@ -142,11 +172,13 @@ class TypeScriptAnalyzer(LanguageAnalyzer):
                 kind = "method" if parent_class else "function"
                 params_node = node.child_by_field_name("parameters")
                 params = _node_text(params_node, source) if params_node else "()"
+                ret_node = node.child_by_field_name("return_type")
+                ret = _node_text(ret_node, source) if ret_node else ""
                 symbols.append(SymbolInfo(
                     name=name,
                     kind=kind,
                     visibility=_infer_visibility(node, source),
-                    signature=f"function {name}{params}",
+                    signature=f"function {name}{params}{ret}",
                     decorators=_get_decorators(node, source),
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,
@@ -160,11 +192,13 @@ class TypeScriptAnalyzer(LanguageAnalyzer):
                 name = _node_text(name_node, source)
                 params_node = node.child_by_field_name("parameters")
                 params = _node_text(params_node, source) if params_node else "()"
+                ret_node = node.child_by_field_name("return_type")
+                ret = _node_text(ret_node, source) if ret_node else ""
                 symbols.append(SymbolInfo(
                     name=name,
                     kind="method",
                     visibility=_infer_visibility(node, source),
-                    signature=f"{name}{params}",
+                    signature=f"{name}{params}{ret}",
                     decorators=_get_decorators(node, source),
                     parent=parent_class,
                     line_start=node.start_point[0] + 1,

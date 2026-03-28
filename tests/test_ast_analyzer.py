@@ -220,6 +220,66 @@ def test_typescript_imports() -> None:
     assert any("angular" in imp for imp in result.imports)
 
 
+def test_typescript_implements_extracted() -> None:
+    """Class implementing interfaces populates the implements field."""
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    user_svc = _by_name(result, "UserService")
+    assert "IUserService" in user_svc.implements
+    assert "Serializable" in user_svc.implements
+
+
+def test_typescript_class_without_implements_has_empty_list() -> None:
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    base_repo = _by_name(result, "BaseRepo")
+    assert base_repo.implements == []
+
+
+def test_typescript_extends_in_signature() -> None:
+    """Class extending another includes extends in signature."""
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    sql_repo = _by_name(result, "SqlRepo")
+    assert "extends BaseRepo" in (sql_repo.signature or "")
+
+
+def test_typescript_method_return_type_in_signature() -> None:
+    """Method signatures include return type annotation."""
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    get_user = _by_name(result, "getUser")
+    assert "Promise<User>" in (get_user.signature or "")
+
+
+def test_typescript_function_return_type_in_signature() -> None:
+    """Top-level function signatures include return type."""
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    fmt = _by_name(result, "formatName")
+    assert "string" in (fmt.signature or "")
+
+
+def test_typescript_decorators_include_arguments() -> None:
+    """Decorators preserve full text including arguments."""
+    src = (FIXTURES / "sample.ts").read_bytes()
+    result = TypeScriptAnalyzer().analyze(Path("sample.ts"), src)
+
+    user_svc = _by_name(result, "UserService")
+    assert any("Injectable" in d for d in user_svc.decorators)
+
+    controller = _by_name(result, "UserController")
+    assert any("/api/users" in d for d in controller.decorators)
+
+    find_one = next(s for s in result.symbols if s.name == "findOne" and s.parent == "UserController")
+    assert any(":id" in d for d in find_one.decorators)
+
+
 # ── Go ────────────────────────────────────────────────────────────────────────
 
 def test_go_struct_and_functions() -> None:

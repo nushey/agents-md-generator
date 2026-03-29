@@ -83,22 +83,22 @@ class CacheData(BaseModel):
     files: dict[str, CachedFile] = Field(default_factory=dict)
 
 
-class GetPayloadChunkInput(BaseModel):
-    """Input parameters for the get_payload_chunk MCP tool."""
+class ReadPayloadChunkInput(BaseModel):
+    """Input parameters for the read_payload_chunk MCP tool."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     project_path: str = Field(
         default=".",
-        description="Path to the project root. Must match the value used in generate_agents_md.",
+        description="Path to the project root. Must match the value used in scan_codebase.",
     )
     chunk_index: int = Field(
         description="Zero-based index of the chunk to retrieve.",
     )
 
 
-class GenerateAgentsMdInput(BaseModel):
-    """Input parameters for the generate_agents_md MCP tool."""
+class ScanCodebaseInput(BaseModel):
+    """Input parameters for the scan_codebase MCP tool."""
 
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
 

@@ -30,8 +30,8 @@ change_detector  →  ast_analyzer  →  context_builder  →  server (MCP tools
    - Aggregates directories above a dynamic threshold into directory summaries
    - Deduplicates repeated method signatures into a `method_patterns` lookup registry
    - Strips per-entry `language` field (already in metadata) and noise decorators
-4. `server.generate_agents_md` (MCP tool) orchestrates the above, serializes to compact JSON for large payloads (>300kb), and returns instructions to Claude.
-5. Claude calls `server.get_payload_chunk` repeatedly (line-based chunking for pretty JSON, byte-based for compact) to retrieve the payload, then writes `AGENTS.md`.
+4. `server.scan_codebase` (MCP tool) orchestrates the above, serializes to compact JSON for large payloads (>300kb), and returns instructions to the AI client.
+5. The client calls `server.read_payload_chunk` repeatedly (line-based chunking for pretty JSON, byte-based for compact) to retrieve the payload, then writes `AGENTS.md`.
 
 ## Conventions & Patterns
 
@@ -103,6 +103,6 @@ This file is generated and maintained by the `agents-md-generator` MCP tool.
 
 > "Update the AGENTS.md for this project"
 
-The assistant will invoke the `generate_agents_md` tool automatically, perform an
+The assistant will invoke the `scan_codebase` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".

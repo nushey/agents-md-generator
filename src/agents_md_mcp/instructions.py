@@ -24,7 +24,7 @@ BLOCK 1 -- HARD CONSTRAINTS (never break these)
 ===================================================================
 
 1. Use ONLY the data in this payload. Never read source files, never call any
-   file-reading tool (Read, Glob, Grep, Bash), never call generate_agents_md.
+   file-reading tool (Read, Glob, Grep, Bash), never call scan_codebase.
 2. Never enumerate files or symbols in lists. Describe PATTERNS and CONVENTIONS.
    WRONG: "UserService, OrderService, TicketService handle business logic"
    RIGHT: "Business logic lives in `<Entity>Service` classes under `src/services/`"
@@ -232,7 +232,7 @@ This file is generated and maintained by the `agents-md-generator` MCP tool.
 
 > "Update the AGENTS.md for this project"
 
-The assistant will invoke the `generate_agents_md` tool automatically, perform an
+The assistant will invoke the `scan_codebase` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
 

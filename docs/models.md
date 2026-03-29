@@ -15,8 +15,8 @@ Todos los modelos heredan de `BaseModel`. Pydantic valida automáticamente los t
 ### Jerarquía de modelos
 
 ```
-GenerateAgentsMdInput        ← entrada de generate_agents_md
-GetPayloadChunkInput         ← entrada de get_payload_chunk
+ScanCodebaseInput        ← entrada de scan_codebase
+ReadPayloadChunkInput         ← entrada de read_payload_chunk
     │
     ▼
 FileChange                   ← qué archivos cambiaron y cómo
@@ -46,9 +46,9 @@ Tiene tres campos clave:
 - `base_commit` — el SHA del commit de git cuando se hizo el último scan (usado para validar que la cache es coherente con el repo)
 - `files` — mapa de `path → CachedFile`
 
-### GenerateAgentsMdInput y GetPayloadChunkInput
+### ScanCodebaseInput y ReadPayloadChunkInput
 
-Los dos modelos que llegan del exterior (desde el cliente MCP). `GenerateAgentsMdInput` tiene `project_path` y `force_full_scan`. `GetPayloadChunkInput` tiene `project_path` y `chunk_index`. Los docstrings de los campos están escritos en segunda persona dirigidos al modelo que los llama — son instrucciones para el cliente MCP, no para el desarrollador.
+Los dos modelos que llegan del exterior (desde el cliente MCP). `ScanCodebaseInput` tiene `project_path` y `force_full_scan`. `ReadPayloadChunkInput` tiene `project_path` y `chunk_index`. Los docstrings de los campos están escritos en segunda persona dirigidos al modelo que los llama — son instrucciones para el cliente MCP, no para el desarrollador.
 
 ## Modelos
 
@@ -61,5 +61,5 @@ Los dos modelos que llegan del exterior (desde el cliente MCP). `GenerateAgentsM
 | `CachedSymbol` | Versión reducida de SymbolInfo para persistir en cache |
 | `CachedFile` | Entrada de cache para un archivo: hash + symbols cacheados |
 | `CacheData` | Raíz del archivo de cache: versión, commit, mapa de archivos |
-| `GenerateAgentsMdInput` | Input de generate_agents_md: project_path y force_full_scan |
-| `GetPayloadChunkInput` | Input de get_payload_chunk: project_path y chunk_index |
+| `ScanCodebaseInput` | Input de scan_codebase: project_path y force_full_scan |
+| `ReadPayloadChunkInput` | Input de read_payload_chunk: project_path y chunk_index |

@@ -1,6 +1,6 @@
 # Flujo completo de ejecución
 
-Este documento describe qué pasa desde que el cliente MCP invoca `generate_agents_md` hasta que AGENTS.md queda escrito en el disco.
+Este documento describe qué pasa desde que el cliente MCP invoca `scan_codebase` hasta que AGENTS.md queda escrito en el disco.
 
 ---
 
@@ -9,9 +9,9 @@ Este documento describe qué pasa desde que el cliente MCP invoca `generate_agen
 ```
 Cliente MCP
     │
-    │  MCP call: generate_agents_md({ project_path, force_full_scan })
+    │  MCP call: scan_codebase({ project_path, force_full_scan })
     ▼
-server.py → generate_agents_md()
+server.py → scan_codebase()
     │
     ▼
 server.py → _run_pipeline()
@@ -31,7 +31,7 @@ server.py → _build_response()
     ▼
 Cliente MCP
     │
-    ├─ STEP 1: Llamar get_payload_chunk(chunk_index=0), luego 1, 2… hasta has_more=false
+    ├─ STEP 1: Llamar read_payload_chunk(chunk_index=0), luego 1, 2… hasta has_more=false
     ├─ STEP 2: Concatenar todos los campos "data" y parsear como JSON
     ├─ STEP 3: Escribir AGENTS.md usando solo esos datos
     └─ STEP 4: Informar al usuario
@@ -180,15 +180,15 @@ Se calcula cuántas líneas tiene y cuántos chunks de 500 líneas eso represent
   "payload_lines": 847,
   "total_chunks": 2,
   "agents_md_path": "/code/mi-proyecto/AGENTS.md",
-  "instructions": "STEP 1 — Retrieve the full payload by calling get_payload_chunk..."
+  "instructions": "STEP 1 — Retrieve the full payload by calling read_payload_chunk..."
 }
 ```
 
 ---
 
-## Paso 8 — Streaming del payload (get_payload_chunk)
+## Paso 8 — Streaming del payload (read_payload_chunk)
 
-El cliente llama `get_payload_chunk` repetidamente con `chunk_index` empezando en 0. Cada respuesta incluye:
+El cliente llama `read_payload_chunk` repetidamente con `chunk_index` empezando en 0. Cada respuesta incluye:
 
 ```json
 {
@@ -205,9 +205,9 @@ Al leer el último chunk (`has_more: false`), el archivo `payload.json` se borra
 
 ## Por qué este diseño y no otro
 
-### ¿Por qué get_payload_chunk en vez de leer el archivo directamente?
+### ¿Por qué read_payload_chunk en vez de leer el archivo directamente?
 
-La alternativa anterior era instruir al cliente a leer `payload.json` con su tool `Read`. Eso requería que el cliente tuviera acceso al filesystem y conociera la ruta exacta del cache. Con `get_payload_chunk`, el flujo es 100% MCP — cualquier cliente compatible (Claude Code, Cursor, Gemini CLI, Windsurf) puede seguirlo sin necesidad de acceso al filesystem. El server gestiona completamente el ciclo de vida del archivo.
+La alternativa anterior era instruir al cliente a leer `payload.json` con su tool `Read`. Eso requería que el cliente tuviera acceso al filesystem y conociera la ruta exacta del cache. Con `read_payload_chunk`, el flujo es 100% MCP — cualquier cliente compatible (Claude Code, Cursor, Gemini CLI, Windsurf) puede seguirlo sin necesidad de acceso al filesystem. El server gestiona completamente el ciclo de vida del archivo.
 
 ### ¿Por qué 500 líneas por chunk?
 

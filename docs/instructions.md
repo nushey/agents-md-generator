@@ -20,7 +20,7 @@ El cuerpo del prompt tiene cuatro secciones:
 
 Prohibiciones absolutas escritas en imperativo:
 1. No leer archivos del proyecto (ni con Read, Glob, Grep, ni Bash)
-2. No llamar a `generate_agents_md` de nuevo
+2. No llamar a `scan_codebase` de nuevo
 3. No enumerar archivos en tablas o listas
 4. No enumerar clases, interfaces ni funciones por nombre — sintetizar patrones
 5. No inventar comandos o herramientas ausentes del payload

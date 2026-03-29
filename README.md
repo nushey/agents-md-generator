@@ -74,7 +74,7 @@ Once registered, ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
-The client will call `generate_agents_md` automatically.
+The client will call `scan_codebase` automatically.
 
 ### Tool Parameters
 
@@ -115,12 +115,12 @@ Sections with no detected data are omitted entirely.
 
 ### How Large Payloads Are Streamed
 
-For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through a second tool: `get_payload_chunk`.
+For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through a second tool: `read_payload_chunk`.
 
 **Flow:**
 
-1. `generate_agents_md` runs the full analysis, writes the payload to disk, and returns a small response with `total_chunks` and instructions
-2. The client calls `get_payload_chunk(project_path, chunk_index=0)`, then increments `chunk_index` until the response contains `has_more: false`
+1. `scan_codebase` runs the full analysis, writes the payload to disk, and returns a small response with `total_chunks` and instructions
+2. The client calls `read_payload_chunk(project_path, chunk_index=0)`, then increments `chunk_index` until the response contains `has_more: false`
 3. The client concatenates all `data` fields in order and parses the result as JSON
 4. The payload file is automatically deleted after the last chunk is read
 
@@ -136,7 +136,7 @@ All runtime artifacts are stored **outside your project**, in the user cache dir
 
 The `<project-hash>` is a SHA-256 of the project's absolute path — unique per project. Nothing is written to your repository.
 
-> **Note:** The server also writes a temporary `payload.json` to this directory during analysis, but it is managed entirely by the `get_payload_chunk` tool and deleted automatically after the last chunk is read. You never need to access it directly.
+> **Note:** The server also writes a temporary `payload.json` to this directory during analysis, but it is managed entirely by the `read_payload_chunk` tool and deleted automatically after the last chunk is read. You never need to access it directly.
 
 ---
 

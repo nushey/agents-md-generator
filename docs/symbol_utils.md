@@ -100,7 +100,7 @@ Agrupa los archivos de test por directorio y por cada directorio produce:
 
 En vez de listar 200 funciones de test, el modelo recibe cuántos tests hay y dónde. Suficiente para la sección de Testing Instructions sin inflar el payload.
 
-### Threshold de impacto (`_passes_threshold`)
+### Filtrado de impacto (`_passes_threshold`)
 
 ```python
 _THRESHOLD_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -109,10 +109,9 @@ def _passes_threshold(impact, threshold):
     return _THRESHOLD_ORDER[impact] <= _THRESHOLD_ORDER[threshold]
 ```
 
-Un cambio "pasa" el threshold si su impacto es igual o mayor al configurado. Ejemplos:
-- threshold=`"medium"`: pasan `"high"` y `"medium"`, se filtra `"low"`
-- threshold=`"high"`: solo pasa `"high"`
-- threshold=`"low"`: pasa todo
+Un cambio "pasa" el filtro si su impacto es igual o mayor al configurado. El valor del filtro se deriva del `SizeProfile`:
+- **small/medium**: filtro `"medium"` → pasan `"high"` y `"medium"`, se filtra `"low"`
+- **large**: filtro `"high"` → solo pasa `"high"` (cambios estructurales/breaking)
 
 ## Funciones
 
@@ -124,6 +123,6 @@ Un cambio "pasa" el threshold si su impacto es igual o mayor al configurado. Eje
 | `_is_minified(analysis)` | Retorna `True` si el archivo JS/TS parece minificado o bundleado |
 | `_filter_decorators(decorators)` | Filtra decoradores de ruido (serialización, CodeDom, etc.) |
 | `_slim_symbol(sym)` | Reduce un símbolo a los campos necesarios para el payload |
-| `_format_full(path, status, analysis)` | Formatea un `FileAnalysis` para `full_analysis`, o `None` si no hay símbolos útiles, es generado, o es trivial |
+| `_format_full(path, status, analysis, profile)` | Formatea un `FileAnalysis` para `full_analysis` usando los caps del `SizeProfile`, o `None` si no hay símbolos útiles, es generado, o es trivial |
 | `_summarize_test_files(entries)` | Colapsa entradas de test en resúmenes por directorio |
 | `_passes_threshold(impact, threshold)` | Verifica si un impacto supera el threshold configurado |

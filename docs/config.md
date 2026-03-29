@@ -8,7 +8,13 @@ Carga y resuelve la configuración del proyecto analizado. Si el proyecto tiene 
 
 ### Merge con defaults
 
-Cuando se encuentra un `.agents-config.json` parcial, se hace `{**DEFAULT_CONFIG, **raw}` — los campos del usuario sobreescriben los defaults, pero los campos no especificados se completan automáticamente. Así un usuario puede poner solo `{ "impact_threshold": "high" }` y todo lo demás funciona.
+Cuando se encuentra un `.agents-config.json` parcial, se hace `{**DEFAULT_CONFIG, **raw}` — los campos del usuario sobreescriben los defaults, pero los campos no especificados se completan automáticamente. Así un usuario puede poner solo `{ "project_size": "large" }` y todo lo demás funciona.
+
+### SizeProfile
+
+Dataclass inmutable (`frozen=True, slots=True`) que contiene todos los knobs de compresión del payload derivados de `project_size`. Los tres perfiles (`small`, `medium`, `large`) están definidos en `SIZE_PROFILES` y cada uno ajusta: caps de métodos/símbolos/archivos, thresholds de agregación, profundidad de directorios, caps de rutas, y filtro de impacto.
+
+`ProjectConfig` resuelve el perfil en `__init__` y lo expone como `config.profile`. Todos los módulos downstream reciben este `SizeProfile` en vez de leer constantes globales.
 
 ### EXTENSION_TO_LANGUAGE
 
@@ -54,9 +60,11 @@ Límite de 1MB por archivo. Archivos más grandes se skipean con un warning. Est
 
 | Símbolo | Qué hace |
 |---|---|
+| `SizeProfile` | Dataclass inmutable con todos los knobs de compresión derivados de `project_size` |
+| `SIZE_PROFILES` | Dict `{"small": ..., "medium": ..., "large": ...}` con los tres perfiles predefinidos |
 | `DEFAULT_CONFIG` | Configuración base, usada cuando no hay `.agents-config.json` |
 | `EXTENSION_TO_LANGUAGE` | Mapa estático extensión → clave de lenguaje |
-| `ProjectConfig` | Clase que encapsula la configuración resuelta con métodos de consulta |
+| `ProjectConfig` | Clase que encapsula la configuración resuelta. Resuelve `project_size` → `SizeProfile` en `__init__` y lo expone como `config.profile` |
 | `ProjectConfig.language_for_extension(ext)` | Devuelve el lenguaje para una extensión, respetando el filtro de lenguajes |
 | `ProjectConfig.is_extension_supported(ext)` | Booleano, wrapper de `language_for_extension` |
 | `load_config(project_path)` | Lee y mergea la config del proyecto, siempre devuelve un `ProjectConfig` válido |

@@ -2,7 +2,7 @@
 
 ## Rol
 
-Es el orquestador del ensamblado del payload. Además de invocar los módulos especializados en el orden correcto, contiene la lógica de post-procesamiento para optimizar el tamaño del payload: threshold dinámico, deduplicación de firmas de métodos, y eliminación del campo `language` por entrada.
+Es el orquestador del ensamblado del payload. Además de invocar los módulos especializados en el orden correcto, contiene la lógica de post-procesamiento para optimizar el tamaño del payload: deduplicación de firmas de métodos y eliminación del campo `language` por entrada. Los caps y thresholds de compresión se derivan del `SizeProfile` resuelto en la configuración.
 
 ## Por qué existe como módulo separado
 
@@ -27,8 +27,7 @@ build_payload()
     │   ├─ symbol_utils._slim_symbol()              → serialización
     │   └─ symbol_utils._format_full()              → entrada full_analysis
     │
-    ├─ _effective_threshold()                        → threshold dinámico según total de archivos
-    ├─ aggregator._aggregate_by_directory()         → colapso de dirs
+    ├─ aggregator._aggregate_by_directory()         → colapso de dirs (threshold del SizeProfile)
     ├─ symbol_utils._summarize_test_files()         → colapso de tests
     │
     ├─ [post-procesamiento para optimizar tamaño]
@@ -66,15 +65,14 @@ Para cada `FileChange` en la lista de cambios:
 
 - **`"deleted"`**: se agrega a `changes` con `impact="high"`. Las eliminaciones son siempre notables.
 - **`"new"`**: se formatea con `_format_full`. Va a `full_analysis` (producción) o `test_analysis` según `_is_test_file`.
-- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica con `classify_impact`, se filtra por `impact_threshold`. Si ningún cambio supera el threshold → el archivo se omite completamente del payload.
+- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica con `classify_impact`, se filtra por el `impact_filter` del `SizeProfile` (medium para small/medium, high para large). Si ningún cambio supera el threshold → el archivo se omite completamente del payload.
 - **`"modified"` sin historial en cache**: se trata como `"new"`.
 
 ## Funciones
 
 | Función | Qué hace |
 |---|---|
-| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Función pública principal. Ensambla y retorna el payload completo como dict |
-| `_effective_threshold(base_threshold, total_files)` | Calcula el threshold de agregación dinámico: >800 archivos → base//2 (mín 3), >400 → base-2 (mín 4) |
+| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Función pública principal. Ensambla y retorna el payload completo como dict. Resuelve `config.profile` y lo pasa a todos los módulos downstream |
 | `_deduplicate_methods(entries)` | Extrae firmas de métodos que aparecen ≥3 veces en un registry `method_patterns` con claves cortas (`m0`, `m1`, ...). Modifica las entradas in-place |
 | `_strip_language_from_file_entries(entries)` | Elimina el campo `language` de entradas individuales de archivo (no de directory summaries). Ya está en `metadata.languages_detected` |
 | `_build_interface_impl_map(analyses)` | Construye un mapa interface → implementors a nivel de proyecto |

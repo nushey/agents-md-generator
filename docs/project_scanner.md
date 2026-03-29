@@ -21,7 +21,7 @@ Todos los archivos pasan por gitignore + exclusiones de config antes de ser cont
 
 #### Depth cap en `directories`
 
-La constante `_MAX_DIR_DEPTH = 3` limita la profundidad. Un archivo en `src/modules/auth/handlers/middleware/` se acumula en `src/modules/auth/`. Esto evita explosión de entradas en proyectos con jerarquías profundas (de ~10k líneas a ~200–400 entradas útiles).
+`profile.max_dir_depth` limita la profundidad (4 para small, 3 para medium, 2 para large). Un archivo en `src/modules/auth/handlers/middleware/` se acumula en `src/modules/auth/` (con depth=3). Esto evita explosión de entradas en proyectos con jerarquías profundas (de ~10k líneas a ~200–400 entradas útiles).
 
 ### `_detect_env_vars`
 

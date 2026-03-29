@@ -46,10 +46,9 @@ Cliente MCP
 
 El resultado es un `ProjectConfig` con:
 - Patrones de exclusión/inclusión
-- Threshold de impacto (`low`, `medium`, `high`)
 - Lenguajes habilitados
 - Tamaño máximo de archivo
-- Threshold de agregación de directorios
+- `SizeProfile` resuelto desde `project_size` — contiene todos los caps y thresholds de compresión (métodos por clase, símbolos por archivo, agregación de directorios, caps de rutas, profundidad de árbol, y filtro de impacto)
 
 ---
 
@@ -220,7 +219,7 @@ Es un balance entre número de llamadas MCP y tamaño de cada respuesta. Chunks 
 
 ### ¿Por qué el diff es semántico y no textual?
 
-Un `git diff` de un archivo refactorizado puede tener 200 líneas modificadas aunque la API pública no cambió. El diff semántico sobre los símbolos detecta exactamente lo que le importa a AGENTS.md: qué cambió en la superficie pública. Esto también permite el filtrado por `impact_threshold`.
+Un `git diff` de un archivo refactorizado puede tener 200 líneas modificadas aunque la API pública no cambió. El diff semántico sobre los símbolos detecta exactamente lo que le importa a AGENTS.md: qué cambió en la superficie pública. El filtrado de impacto se deriva del `SizeProfile` — medium para proyectos small/medium, high para large.
 
 ### ¿Por qué las instrucciones para el cliente van embebidas en el payload?
 

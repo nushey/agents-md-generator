@@ -44,7 +44,7 @@ Clasifica cada cambio en `"high"`, `"medium"` o `"low"`:
 | Se agrega una función o método público nuevo | medium |
 | Cualquier otro cambio público | low |
 
-El `impact_threshold` de la config filtra qué cambios llegan al payload — si es `"high"`, solo los cambios de impacto alto se incluyen. Esto evita regenerar AGENTS.md por cambios menores.
+El filtro de impacto se deriva del `SizeProfile` del proyecto: `"medium"` para proyectos small/medium (incluye cambios high y medium), `"high"` para proyectos large (solo cambios estructurales/breaking). Esto evita regenerar AGENTS.md por cambios menores en proyectos grandes.
 
 ### _HIGH_IMPACT_DECORATORS
 

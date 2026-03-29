@@ -146,7 +146,7 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 
 ```json
 {
-  "impact_threshold": "medium",
+  "project_size": "medium",
   "exclude": [
     "**/node_modules/**",
     "**/bin/**",
@@ -174,8 +174,7 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
   "include": [],
   "languages": "auto",
   "agents_md_path": "./AGENTS.md",
-  "max_file_size_bytes": 1048576,
-  "dir_aggregation_threshold": 8
+  "max_file_size_bytes": 1048576
 }
 ```
 
@@ -183,34 +182,39 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `impact_threshold` | `"medium"` | Minimum change impact to include in incremental payload (see [Impact Threshold](#impact-threshold)) |
+| `project_size` | `"medium"` | Project scale — tunes all internal caps and thresholds (see [Project Size Profiles](#project-size-profiles)) |
 | `exclude` | (see above) | Glob patterns to exclude from analysis |
 | `include` | `[]` | If non-empty, only analyze files matching these patterns |
 | `languages` | `"auto"` | `"auto"` detects all supported languages, or pass a list like `["typescript", "python"]` |
 | `agents_md_path` | `"./AGENTS.md"` | Output path for the generated file |
 | `max_file_size_bytes` | `1048576` | Files larger than this are skipped (default: 1 MB) |
-| `dir_aggregation_threshold` | `8` | Directories with this many or more files of the same language are collapsed into a single directory summary instead of per-file entries. Reduces payload size significantly on large codebases. Set to a high number to disable. |
 
-You can commit `.agents-config.json` to share exclusion rules and thresholds with your team.
+You can commit `.agents-config.json` to share settings with your team.
 
-### Impact Threshold
+### Project Size Profiles
 
-The `impact_threshold` controls which symbol changes are included in incremental scan payloads. Changes below the threshold are silently ignored — `AGENTS.md` is not regenerated for them.
+The `project_size` setting controls how aggressively the payload is compressed. A single knob tunes all internal caps — methods per class, symbols per file, directory aggregation, route caps, tree depth, and impact filtering.
 
-| Change type | Symbol kind | Extra condition | Impact |
-|---|---|---|---|
-| any | any | Has HTTP decorator (`@HttpGet`, `@app.route`, `@Get`, …) | `high` |
-| `added` or `removed` | `class`, `interface`, `struct` | — | `high` |
-| `removed` | `method` | public | `high` |
-| `modified` | any | public | `medium` |
-| `added` | `function` or `method` | public | `medium` |
-| any | any | none of the above | `low` |
+| Profile | Lines (guidance) | Impact filter | Description |
+|---------|-----------------|---------------|-------------|
+| `"small"` | 0–15k | medium | Generous caps — nearly everything is included. Best for small projects where full visibility matters. |
+| `"medium"` _(default)_ | 15k–50k | medium | Balanced caps suitable for most projects. |
+| `"large"` | 50k+ | high | Aggressive compression — only structural/breaking changes in diffs, more directory collapsing, tighter symbol caps. |
 
-**Choosing a threshold:**
+**Detailed profile values:**
 
-- `"high"` — Only regenerate `AGENTS.md` for breaking or structural changes. Best for large, stable codebases where minor additions are frequent.
-- `"medium"` _(default)_ — Regenerate when the public API surface grows or changes. Suitable for most projects.
-- `"low"` — Regenerate on any public symbol change. Best for early-stage projects where the architecture is still evolving.
+| Constant | Small | Medium | Large |
+|----------|-------|--------|-------|
+| Methods per class | 30 | 12 | 8 |
+| Symbols per file | 40 | 20 | 10 |
+| Dir aggregation threshold | 20 | 10 | 5 |
+| Files per layer (before overflow) | 15 | 8 | 5 |
+| Aggregation sample size | 5 | 4 | 3 |
+| Route controllers cap | 30 | 15 | 10 |
+| Routes per controller | 15 | 8 | 5 |
+| Go handlers cap | 15 | 8 | 5 |
+| Directory tree depth | 4 | 3 | 2 |
+| Impact filter | medium | medium | high |
 
 ---
 

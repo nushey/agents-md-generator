@@ -13,7 +13,7 @@ Un proyecto de 500k líneas puede tener 300+ archivos de producción. Si cada un
 Para cada directorio en `full_analysis`:
 
 1. **Agrupar por lenguaje**: identifica el lenguaje dominante (el de mayor cantidad de archivos)
-2. **Verificar threshold**: si los archivos del lenguaje dominante son menos que `dir_aggregation_threshold` → se mantienen individuales (capeados a `_MAX_FILES_PER_LAYER` si exceden ese límite)
+2. **Verificar threshold**: si los archivos del lenguaje dominante son menos que `profile.dir_aggregation_threshold` → se mantienen individuales (capeados a `profile.max_files_per_layer` si exceden ese límite)
 3. **Caso especial — DTO containers**: si todos los archivos dominantes fueron minificados como `dto_container` por `_is_low_entropy` → se genera un resumen semántico directamente
 4. **Extraer métodos comunes**: via `_extract_common_methods` — firmas de métodos (de las listas `methods` dentro de cada símbolo) que aparecen en ≥ 60% de los archivos
 5. **Verificar cobertura**: `len(common_methods) / avg_methods_per_file`. Si hay menos de 2 métodos comunes o la cobertura es < 40%:
@@ -28,7 +28,7 @@ Los archivos de lenguaje minoritario en el mismo directorio **siempre** se manti
 ```
 Dir con N archivos del lenguaje dominante
   │
-  ├─ N < threshold → individuales (capeados a MAX_FILES_PER_LAYER)
+  ├─ N < threshold → individuales (capeados a profile.max_files_per_layer)
   │
   ├─ Todos dto_container → summary DTO especial
   │
@@ -87,6 +87,6 @@ Esto garantiza que directorios grandes siempre se colapsen, incluso cuando sus a
 
 | Función | Qué hace |
 |---|---|
-| `_aggregate_by_directory(entries, threshold)` | Entry point. Recibe la lista de `full_analysis` entries y retorna la lista con los directorios elegibles colapsados en `directory_summary` |
+| `_aggregate_by_directory(entries, threshold, profile)` | Entry point. Recibe la lista de `full_analysis` entries y el `SizeProfile`, y retorna la lista con los directorios elegibles colapsados en `directory_summary` |
 | `_extract_common_methods(entries)` | Retorna firmas de métodos (extraídas de las listas `methods` de cada símbolo) que aparecen en ≥ 60% de los archivos dados |
 | `_extract_class_pattern(entries)` | Detecta sufijo o prefijo común en nombres de clases. Retorna el match más largo o `None` |

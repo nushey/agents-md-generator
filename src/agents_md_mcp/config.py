@@ -1,13 +1,75 @@
 """ConfigLoader: reads .agents-config.json or returns defaults."""
 
+from __future__ import annotations
+
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 CONFIG_FILENAME = ".agents-config.json"
+
+
+# ── Size profiles ────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class SizeProfile:
+    """Tuning knobs derived from project_size."""
+
+    max_methods_per_symbol: int
+    max_symbols_per_file: int
+    dir_aggregation_threshold: int
+    max_files_per_layer: int
+    aggregation_sample_size: int
+    max_route_controllers: int
+    max_routes_per_controller: int
+    max_go_handlers: int
+    max_dir_depth: int
+    impact_filter: str  # "medium" | "high" — derived, not user-facing
+
+
+SIZE_PROFILES: dict[str, SizeProfile] = {
+    "small": SizeProfile(
+        max_methods_per_symbol=30,
+        max_symbols_per_file=40,
+        dir_aggregation_threshold=20,
+        max_files_per_layer=15,
+        aggregation_sample_size=5,
+        max_route_controllers=30,
+        max_routes_per_controller=15,
+        max_go_handlers=15,
+        max_dir_depth=4,
+        impact_filter="medium",
+    ),
+    "medium": SizeProfile(
+        max_methods_per_symbol=12,
+        max_symbols_per_file=20,
+        dir_aggregation_threshold=10,
+        max_files_per_layer=8,
+        aggregation_sample_size=4,
+        max_route_controllers=15,
+        max_routes_per_controller=8,
+        max_go_handlers=8,
+        max_dir_depth=3,
+        impact_filter="medium",
+    ),
+    "large": SizeProfile(
+        max_methods_per_symbol=8,
+        max_symbols_per_file=10,
+        dir_aggregation_threshold=5,
+        max_files_per_layer=5,
+        aggregation_sample_size=3,
+        max_route_controllers=10,
+        max_routes_per_controller=5,
+        max_go_handlers=5,
+        max_dir_depth=2,
+        impact_filter="high",
+    ),
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "exclude": [
@@ -38,10 +100,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ],
     "include": [],
     "languages": "auto",
-    "impact_threshold": "medium",
+    "project_size": "medium",
     "agents_md_path": "./AGENTS.md",
     "max_file_size_bytes": 1_048_576,  # 1MB
-    "dir_aggregation_threshold": 8,  # dirs with >= N files of same language are aggregated
 }
 
 # Extension → tree-sitter language key
@@ -63,13 +124,13 @@ class ProjectConfig:
         self.exclude: list[str] = raw.get("exclude", DEFAULT_CONFIG["exclude"])
         self.include: list[str] = raw.get("include", DEFAULT_CONFIG["include"])
         self.languages: str | list[str] = raw.get("languages", DEFAULT_CONFIG["languages"])
-        self.impact_threshold: str = raw.get("impact_threshold", DEFAULT_CONFIG["impact_threshold"])
+        self.project_size: str = raw.get("project_size", DEFAULT_CONFIG["project_size"])
         self.agents_md_path: str = raw.get("agents_md_path", DEFAULT_CONFIG["agents_md_path"])
         self.max_file_size_bytes: int = raw.get(
             "max_file_size_bytes", DEFAULT_CONFIG["max_file_size_bytes"]
         )
-        self.dir_aggregation_threshold: int = raw.get(
-            "dir_aggregation_threshold", DEFAULT_CONFIG["dir_aggregation_threshold"]
+        self.profile: SizeProfile = SIZE_PROFILES.get(
+            self.project_size, SIZE_PROFILES["medium"]
         )
 
     def language_for_extension(self, ext: str) -> Optional[str]:

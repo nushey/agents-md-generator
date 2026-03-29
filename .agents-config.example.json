@@ -1,5 +1,5 @@
 {
-  "impact_threshold": "medium",
+  "project_size": "medium",
   "exclude": [
     "**/node_modules/**",
     "**/bin/**",

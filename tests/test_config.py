@@ -8,6 +8,7 @@ import pytest
 from agents_md_mcp.config import (
     DEFAULT_CONFIG,
     EXTENSION_TO_LANGUAGE,
+    SIZE_PROFILES,
     load_config,
 )
 
@@ -15,7 +16,8 @@ from agents_md_mcp.config import (
 def test_load_config_defaults(tmp_path: Path) -> None:
     """No config file → defaults are returned."""
     cfg = load_config(tmp_path)
-    assert cfg.impact_threshold == "medium"
+    assert cfg.project_size == "medium"
+    assert cfg.profile is SIZE_PROFILES["medium"]
     assert cfg.languages == "auto"
     assert len(cfg.exclude) > 0
 
@@ -23,11 +25,12 @@ def test_load_config_defaults(tmp_path: Path) -> None:
 def test_load_config_from_file(tmp_path: Path) -> None:
     """Partial config merges with defaults."""
     (tmp_path / ".agents-config.json").write_text(
-        json.dumps({"impact_threshold": "high"}),
+        json.dumps({"project_size": "large"}),
         encoding="utf-8",
     )
     cfg = load_config(tmp_path)
-    assert cfg.impact_threshold == "high"
+    assert cfg.project_size == "large"
+    assert cfg.profile is SIZE_PROFILES["large"]
     # Defaults preserved
     assert cfg.languages == "auto"
     assert cfg.max_file_size_bytes == DEFAULT_CONFIG["max_file_size_bytes"]
@@ -37,7 +40,7 @@ def test_load_config_corrupt_file(tmp_path: Path) -> None:
     """Corrupt JSON falls back to defaults without raising."""
     (tmp_path / ".agents-config.json").write_text("{ not valid json", encoding="utf-8")
     cfg = load_config(tmp_path)
-    assert cfg.impact_threshold == "medium"
+    assert cfg.project_size == "medium"
 
 
 def test_language_for_extension_auto() -> None:

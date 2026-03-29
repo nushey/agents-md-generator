@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from .change_detector import _is_excluded
-from .config import EXTENSION_TO_LANGUAGE, ProjectConfig
+from .config import EXTENSION_TO_LANGUAGE, ProjectConfig, SizeProfile
 from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileAnalysis
 from .path_utils import rel_posix
@@ -69,8 +69,7 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
         if f.is_file() and not f.name.startswith(".")
     ][:30]
 
-    # Directory summary: file count + languages (capped at depth 3)
-    _MAX_DIR_DEPTH = 2
+    max_dir_depth = config.profile.max_dir_depth
     dir_summary: dict[str, dict] = {}
     try:
         for item in root.rglob("*"):
@@ -84,9 +83,9 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
             parent_rel = rel_posix(item.parent, root)
             if parent_rel == ".":
                 continue
-            # Cap depth: "a/b/c/d" → "a/b/c" when depth > _MAX_DIR_DEPTH
+            # Cap depth: "a/b/c/d" → "a/b/c" when depth > max_dir_depth
             parts = parent_rel.split("/")
-            capped = "/".join(parts[:_MAX_DIR_DEPTH])
+            capped = "/".join(parts[:max_dir_depth])
             if capped not in dir_summary:
                 dir_summary[capped] = {"file_count": 0, "languages": set()}
             dir_summary[capped]["file_count"] += 1
@@ -288,11 +287,6 @@ _PY_HTTP_METHODS = {"get": "GET", "post": "POST", "put": "PUT", "delete": "DELET
 
 _ROUTE_ARG_RE = re.compile(r"""\(\s*['"](.+?)['"]\s*\)""")
 
-_MAX_ROUTE_CONTROLLERS = 10
-_MAX_ROUTES_PER_CONTROLLER = 5
-_MAX_GO_HANDLERS = 5
-
-
 def _extract_route_arg(decorator_text: str) -> str | None:
     """Extract the route path from a decorator string like Controller('/api/users')."""
     m = _ROUTE_ARG_RE.search(decorator_text)
@@ -333,13 +327,10 @@ def _cap_routes(routes: list[dict], cap: int) -> list[dict]:
     return selected
 
 
-def _detect_wiring(analyses: dict[str, FileAnalysis]) -> dict:
+def _detect_wiring(analyses: dict[str, FileAnalysis], profile: SizeProfile) -> dict:
     """Post-process parsed FileAnalysis objects to extract wiring information.
 
-    Detects route maps for all languages. Applies caps:
-    - Max 10 controllers/files in route_map
-    - Max 5 routes per controller (one of each HTTP method first, then fill)
-    - Max 5 Go handlers per file
+    Detects route maps for all languages. Caps are controlled by *profile*.
     """
     route_map: list[dict] = []
 
@@ -359,23 +350,23 @@ def _detect_wiring(analyses: dict[str, FileAnalysis]) -> dict:
     for entry in route_map:
         if "routes" in entry:
             all_routes = entry["routes"]
-            entry["routes"] = _cap_routes(all_routes, _MAX_ROUTES_PER_CONTROLLER)
-            if len(all_routes) > _MAX_ROUTES_PER_CONTROLLER:
+            entry["routes"] = _cap_routes(all_routes, profile.max_routes_per_controller)
+            if len(all_routes) > profile.max_routes_per_controller:
                 entry["total_routes"] = len(all_routes)
         if "handlers" in entry:
             all_handlers = entry["handlers"]
-            entry["handlers"] = all_handlers[:_MAX_GO_HANDLERS]
-            if len(all_handlers) > _MAX_GO_HANDLERS:
+            entry["handlers"] = all_handlers[:profile.max_go_handlers]
+            if len(all_handlers) > profile.max_go_handlers:
                 entry["total_handlers"] = len(all_handlers)
 
     total_controllers = len(route_map)
-    if total_controllers > _MAX_ROUTE_CONTROLLERS:
-        route_map = route_map[:_MAX_ROUTE_CONTROLLERS]
+    if total_controllers > profile.max_route_controllers:
+        route_map = route_map[:profile.max_route_controllers]
 
     result: dict = {}
     if route_map:
         result["route_map"] = route_map
-        if total_controllers > _MAX_ROUTE_CONTROLLERS:
+        if total_controllers > profile.max_route_controllers:
             result["total_route_files"] = total_controllers
     return result
 

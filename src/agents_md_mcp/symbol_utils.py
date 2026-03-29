@@ -1,7 +1,10 @@
 """Utilities for filtering, formatting, and classifying code symbols."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
+from .config import SizeProfile
 from .models import FileAnalysis
 
 # ── Impact threshold ──────────────────────────────────────────────────────────
@@ -150,9 +153,6 @@ def _is_low_entropy(analysis: FileAnalysis) -> bool:
     return True
 
 
-_MAX_METHODS_PER_SYMBOL = 8
-_MAX_SYMBOLS_PER_FILE = 10
-
 _MEMBER_CONTAINER_KINDS = frozenset({"class", "interface", "struct"})
 
 
@@ -195,15 +195,15 @@ def _parse_constructor_deps(sig: str) -> list[str]:
     return deps
 
 
-def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None:
+def _format_full(path: str, _status: str, analysis: FileAnalysis, profile: SizeProfile) -> dict | None:
     """Format a file for full_analysis — public symbols only.
 
     Returns None if the file has no public symbols worth including,
     or if the file is detected as minified/bundled.
 
-    Caps applied:
-    - Methods per class/interface/struct: _MAX_METHODS_PER_SYMBOL
-    - Symbols per file: _MAX_SYMBOLS_PER_FILE
+    Caps (controlled by *profile*):
+    - Methods per class/interface/struct: profile.max_methods_per_symbol
+    - Symbols per file: profile.max_symbols_per_file
     total_methods / total_symbols are added when truncated.
     """
     if _is_minified(analysis):
@@ -257,8 +257,8 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
                 for s in analysis.symbols
                 if s.parent == sym.name and s.kind == "method" and _is_public(s)
             ]
-            entry["methods"] = all_methods[:_MAX_METHODS_PER_SYMBOL]
-            if len(all_methods) > _MAX_METHODS_PER_SYMBOL:
+            entry["methods"] = all_methods[:profile.max_methods_per_symbol]
+            if len(all_methods) > profile.max_methods_per_symbol:
                 entry["total_methods"] = len(all_methods)
 
             # DTO detection — classes/structs with no methods get is_dto tag, no properties
@@ -302,9 +302,9 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis) -> dict | None
     result: dict = {
         "file": path,
         "language": analysis.language,
-        "symbols": symbols_out[:_MAX_SYMBOLS_PER_FILE],
+        "symbols": symbols_out[:profile.max_symbols_per_file],
     }
-    if total > _MAX_SYMBOLS_PER_FILE:
+    if total > profile.max_symbols_per_file:
         result["total_symbols"] = total
     return result
 

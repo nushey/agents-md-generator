@@ -1,7 +1,10 @@
 """Tests for symbol_utils.py — _is_minified, _format_full, _slim_symbol."""
 
+from agents_md_mcp.config import SIZE_PROFILES
 from agents_md_mcp.models import FileAnalysis, SymbolInfo
 from agents_md_mcp.symbol_utils import _format_full, _is_minified, _parse_constructor_deps, _slim_symbol
+
+_MEDIUM = SIZE_PROFILES["medium"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -83,19 +86,19 @@ def test_is_minified_ignores_child_symbols() -> None:
 
 def test_format_full_returns_none_for_empty_symbols() -> None:
     analysis = _analysis("src/empty.js", "javascript", [])
-    assert _format_full("src/empty.js", "new", analysis) is None
+    assert _format_full("src/empty.js", "new", analysis, _MEDIUM) is None
 
 
 def test_format_full_returns_none_when_only_private_symbols() -> None:
     syms = [_sym("_helper", visibility="private"), _sym("_internal", visibility="private")]
     analysis = _analysis("src/utils.py", "python", syms)
-    assert _format_full("src/utils.py", "new", analysis) is None
+    assert _format_full("src/utils.py", "new", analysis, _MEDIUM) is None
 
 
 def test_format_full_returns_none_for_minified_js() -> None:
     syms = [_sym(n) for n in ["a", "b", "c", "d", "e", "f", "g", "h"]]
     analysis = _analysis("lib/vendor.js", "javascript", syms)
-    assert _format_full("lib/vendor.js", "new", analysis) is None
+    assert _format_full("lib/vendor.js", "new", analysis, _MEDIUM) is None
 
 
 def test_format_full_includes_public_symbols() -> None:
@@ -105,7 +108,7 @@ def test_format_full_includes_public_symbols() -> None:
         _sym("_internal", visibility="private"),
     ]
     analysis = _analysis("src/orders.py", "python", syms)
-    result = _format_full("src/orders.py", "new", analysis)
+    result = _format_full("src/orders.py", "new", analysis, _MEDIUM)
     assert result is not None
     names = [s["name"] for s in result["symbols"]]
     assert "OrderService" in names
@@ -118,7 +121,7 @@ def test_format_full_omits_decorators_when_empty() -> None:
         _sym("DoWork", kind="method", sig="public void DoWork()", parent="MyClass"),
     ]
     analysis = _analysis("src/Foo.cs", "c_sharp", syms)
-    result = _format_full("src/Foo.cs", "new", analysis)
+    result = _format_full("src/Foo.cs", "new", analysis, _MEDIUM)
     assert result is not None
     assert "decorators" not in result["symbols"][0]
 
@@ -129,7 +132,7 @@ def test_format_full_includes_decorators_when_present() -> None:
         _sym("Get", kind="method", sig="public void Get()", parent="MyController"),
     ]
     analysis = _analysis("src/Ctrl.cs", "c_sharp", syms)
-    result = _format_full("src/Ctrl.cs", "new", analysis)
+    result = _format_full("src/Ctrl.cs", "new", analysis, _MEDIUM)
     assert result is not None
     assert result["symbols"][0]["decorators"] == ["ApiController", "Route"]
 
@@ -141,7 +144,7 @@ def test_format_full_class_includes_public_methods() -> None:
         _sym("_validate", kind="method", visibility="private", parent="OrderService"),
     ]
     analysis = _analysis("src/OrderService.cs", "c_sharp", syms)
-    result = _format_full("src/OrderService.cs", "new", analysis)
+    result = _format_full("src/OrderService.cs", "new", analysis, _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert cls["name"] == "OrderService"
@@ -156,7 +159,7 @@ def test_format_full_constructor_deps_extracted() -> None:
         _sym("OrderService", kind="constructor", sig="public OrderService(IRepository repo, ILogger logger)", parent="OrderService"),
         _sym("Create", kind="method", sig="public void Create()", parent="OrderService"),
     ]
-    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
+    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert "constructor_deps" in cls
@@ -171,7 +174,7 @@ def test_format_full_empty_constructor_no_deps() -> None:
         _sym("SimpleEntity", kind="constructor", sig="public SimpleEntity()", parent="SimpleEntity"),
         _sym("Save", kind="method", sig="public void Save()", parent="SimpleEntity"),
     ]
-    result = _format_full("src/SimpleEntity.cs", "new", _analysis("src/SimpleEntity.cs", "c_sharp", syms))
+    result = _format_full("src/SimpleEntity.cs", "new", _analysis("src/SimpleEntity.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert "constructor_deps" not in cls
@@ -184,7 +187,7 @@ def test_format_full_dto_class_gets_is_dto_flag() -> None:
         _sym("Name", kind="property", sig="public string Name", parent="Product"),
         _sym("Price", kind="property", sig="public decimal Price", parent="Product"),
     ]
-    result = _format_full("src/Product.cs", "new", _analysis("src/Product.cs", "c_sharp", syms))
+    result = _format_full("src/Product.cs", "new", _analysis("src/Product.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     assert result["kind"] == "dto_container"
     assert result["is_dto"] is True
@@ -196,7 +199,7 @@ def test_format_full_trivial_class_returns_dto_container() -> None:
         _sym("PlainDto", kind="class"),
         _sym("Name", kind="property", sig="public string Name", parent="PlainDto"),
     ]
-    result = _format_full("src/PlainDto.cs", "new", _analysis("src/PlainDto.cs", "c_sharp", syms))
+    result = _format_full("src/PlainDto.cs", "new", _analysis("src/PlainDto.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     assert result["kind"] == "dto_container"
     assert result["is_dto"] is True
@@ -209,7 +212,7 @@ def test_format_full_class_with_methods_not_dto() -> None:
         _sym("Status", kind="property", sig="public string Status", parent="OrderService"),
         _sym("Process", kind="method", sig="public void Process()", parent="OrderService"),
     ]
-    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms))
+    result = _format_full("src/OrderService.cs", "new", _analysis("src/OrderService.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert "is_dto" not in cls
@@ -223,7 +226,7 @@ def test_format_full_big_dto_no_properties() -> None:
         _sym(f"Prop{i}", kind="property", sig=f"public string Prop{i}", parent="BigDto")
         for i in range(20)
     ]
-    result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms))
+    result = _format_full("src/BigDto.cs", "new", _analysis("src/BigDto.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     assert result["kind"] == "dto_container"
     assert result["is_dto"] is True
@@ -236,7 +239,7 @@ def test_format_full_interface_methods_listed() -> None:
         _sym("GetAll", kind="method", sig="public Task<List<T>> GetAll()", parent="IRepository"),
         _sym("Save", kind="method", sig="public Task Save(T entity)", parent="IRepository"),
     ]
-    result = _format_full("src/IRepository.cs", "new", _analysis("src/IRepository.cs", "c_sharp", syms))
+    result = _format_full("src/IRepository.cs", "new", _analysis("src/IRepository.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     iface = result["symbols"][0]
     assert iface["kind"] == "interface"
@@ -251,7 +254,7 @@ def test_format_full_dto_no_private_properties() -> None:
         _sym("_cache", kind="property", sig="private Dictionary _cache", visibility="private", parent="Service"),
         _sym("Name", kind="property", sig="public string Name", parent="Service"),
     ]
-    result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms))
+    result = _format_full("src/Service.cs", "new", _analysis("src/Service.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     assert result["kind"] == "dto_container"
 
@@ -263,7 +266,7 @@ def test_format_full_top_level_function_not_nested_under_class() -> None:
         _sym("innerMethod", kind="method", parent="MyClass"),
     ]
     analysis = _analysis("src/app.py", "python", syms)
-    result = _format_full("src/app.py", "new", analysis)
+    result = _format_full("src/app.py", "new", analysis, _MEDIUM)
     assert result is not None
     names = [s["name"] for s in result["symbols"]]
     assert "MyClass" in names
@@ -309,7 +312,7 @@ def test_format_full_class_with_implements() -> None:
                    implements=["IRepository", "IDisposable"]),
         _sym("Save", kind="method", sig="public void Save()", parent="SqlRepo"),
     ]
-    result = _format_full("src/SqlRepo.cs", "new", _analysis("src/SqlRepo.cs", "c_sharp", syms))
+    result = _format_full("src/SqlRepo.cs", "new", _analysis("src/SqlRepo.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert cls["implements"] == ["IRepository", "IDisposable"]
@@ -321,7 +324,7 @@ def test_format_full_class_without_implements_has_no_key() -> None:
         _sym("Simple", kind="class"),
         _sym("Run", kind="method", sig="public void Run()", parent="Simple"),
     ]
-    result = _format_full("src/Simple.cs", "new", _analysis("src/Simple.cs", "c_sharp", syms))
+    result = _format_full("src/Simple.cs", "new", _analysis("src/Simple.cs", "c_sharp", syms), _MEDIUM)
     assert result is not None
     cls = result["symbols"][0]
     assert "implements" not in cls

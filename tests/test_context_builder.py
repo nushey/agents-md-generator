@@ -6,13 +6,15 @@ from pathlib import Path
 import pytest
 
 from agents_md_mcp.cache import make_empty_cache
-from agents_md_mcp.config import load_config
+from agents_md_mcp.config import SIZE_PROFILES, load_config
 from agents_md_mcp.aggregator import _aggregate_by_directory, _extract_class_pattern, _is_dto_directory
 from agents_md_mcp.build_system import _detect_build_systems
 from agents_md_mcp.context_builder import build_payload, _build_interface_impl_map
 from agents_md_mcp.project_scanner import _detect_wiring, _cap_routes, _scan_project_structure
 from agents_md_mcp.symbol_utils import _passes_threshold
 from agents_md_mcp.models import CachedFile, FileAnalysis, FileChange, SymbolInfo
+
+_MEDIUM = SIZE_PROFILES["medium"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -358,7 +360,7 @@ def test_aggregate_below_threshold_keeps_individual() -> None:
         _file_entry("src/a.py", "python"),
         _file_entry("src/b.py", "python"),
     ]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     # Below threshold — must remain as individual file entries
     assert len(result) == 2
     assert all(e.get("kind") != "directory_summary" for e in result)
@@ -372,7 +374,7 @@ def test_aggregate_above_threshold_produces_summary() -> None:
         ])
         for i in range(8)
     ]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     assert len(result) == 1
     summary = result[0]
     assert summary["kind"] == "directory_summary"
@@ -388,7 +390,7 @@ def test_aggregate_weak_pattern_produces_fallback_summary() -> None:
         _file_entry(f"src/f{i}.py", "python", [_sym_dict(f"unique_{i}")])
         for i in range(8)
     ]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     summaries = [e for e in result if e.get("kind") == "directory_summary"]
     assert len(summaries) == 1
     assert summaries[0]["file_count"] == 8
@@ -399,7 +401,7 @@ def test_aggregate_minority_language_kept_individual() -> None:
     shared_syms = [_sym_dict("get"), _sym_dict("save"), _sym_dict("delete")]
     py_entries = [_file_entry(f"src/repo{i}.py", "python", shared_syms) for i in range(8)]
     ts_entry = _file_entry("src/utils.ts", "typescript", [_sym_dict("helper")])
-    result = _aggregate_by_directory(py_entries + [ts_entry], threshold=8)
+    result = _aggregate_by_directory(py_entries + [ts_entry], threshold=8, profile=_MEDIUM)
 
     kinds = [e.get("kind") for e in result]
     assert "directory_summary" in kinds
@@ -414,7 +416,7 @@ def test_aggregate_different_dirs_are_independent() -> None:
         [_file_entry(f"services/s{i}.py", "python", shared_syms) for i in range(8)]
         + [_file_entry(f"models/m{i}.py", "python", shared_syms) for i in range(8)]
     )
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     summaries = [e for e in result if e.get("kind") == "directory_summary"]
     assert len(summaries) == 2
     dirs = {s["directory"] for s in summaries}
@@ -541,7 +543,7 @@ def test_is_dto_directory_empty_entries() -> None:
 def test_aggregate_dto_directory_produces_summary() -> None:
     """A directory of DTO classes (no methods) above threshold → directory_summary."""
     entries = [_dto_entry(f"Entities/Dto{i}.cs", f"OrderDto{i}") for i in range(8)]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     assert len(result) == 1
     summary = result[0]
     assert summary["kind"] == "directory_summary"
@@ -551,7 +553,7 @@ def test_aggregate_dto_directory_produces_summary() -> None:
 
 def test_aggregate_dto_directory_includes_naming_pattern() -> None:
     entries = [_dto_entry(f"Entities/f{i}.cs", f"OrderDto{i}") for i in range(8)]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     summary = result[0]
     assert "naming_pattern" in summary
     assert "Dto" in summary["naming_pattern"]["pattern"]
@@ -560,7 +562,7 @@ def test_aggregate_dto_directory_includes_naming_pattern() -> None:
 
 def test_aggregate_dto_directory_includes_sample_files() -> None:
     entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(8)]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     assert "sample_files" in result[0]
     assert len(result[0]["sample_files"]) <= 3
 
@@ -568,7 +570,7 @@ def test_aggregate_dto_directory_includes_sample_files() -> None:
 def test_aggregate_dto_below_threshold_keeps_individual() -> None:
     """DTO directory below threshold → individual files, no summary."""
     entries = [_dto_entry(f"Entities/Dto{i}.cs", f"Dto{i}") for i in range(4)]
-    result = _aggregate_by_directory(entries, threshold=8)
+    result = _aggregate_by_directory(entries, threshold=8, profile=_MEDIUM)
     assert all(e.get("kind") != "directory_summary" for e in result)
 
 
@@ -587,7 +589,7 @@ def test_wiring_csharp_routes() -> None:
         SymbolInfo(name="GetById", kind="method", parent="OrderController", decorators=['HttpGet("{id}")']),
     ]
     analyses = {"Controllers/OrderController.cs": _make_analysis("Controllers/OrderController.cs", "c_sharp", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
 
     assert "route_map" in result
     entry = result["route_map"][0]
@@ -608,7 +610,7 @@ def test_wiring_typescript_nestjs_routes() -> None:
         SymbolInfo(name="findOne", kind="method", parent="UserController", decorators=["Get(':id')"]),
     ]
     analyses = {"src/user.controller.ts": _make_analysis("src/user.controller.ts", "typescript", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
 
     assert "route_map" in result
     entry = result["route_map"][0]
@@ -626,7 +628,7 @@ def test_wiring_python_fastapi_routes() -> None:
         SymbolInfo(name="get_user", kind="function", decorators=["app.get('/users/{id}')"]),
     ]
     analyses = {"src/routes.py": _make_analysis("src/routes.py", "python", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
 
     assert "route_map" in result
     entry = result["route_map"][0]
@@ -645,7 +647,7 @@ def test_wiring_go_handlers() -> None:
         SymbolInfo(name="helperFunc", kind="function", signature="func helperFunc(x int)"),
     ]
     analyses = {"handlers.go": _make_analysis("handlers.go", "go", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
 
     assert "route_map" in result
     handlers = result["route_map"][0]["handlers"]
@@ -662,7 +664,7 @@ def test_wiring_no_routes_returns_empty() -> None:
         SymbolInfo(name="getUser", kind="method", parent="UserService"),
     ]
     analyses = {"src/service.ts": _make_analysis("src/service.ts", "typescript", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
     assert result == {}
 
 
@@ -713,36 +715,36 @@ def test_cap_routes_fills_remaining_slots() -> None:
     assert "POST" in methods
 
 
-def test_wiring_caps_controllers_at_10() -> None:
-    """More than 10 controllers → capped with total_route_files count."""
+def test_wiring_caps_controllers() -> None:
+    """More controllers than profile cap → capped with total_route_files count."""
     analyses = {}
-    for i in range(15):
+    for i in range(20):
         symbols = [
             SymbolInfo(name=f"Ctrl{i}", kind="class", decorators=["Controller()"]),
             SymbolInfo(name="index", kind="method", parent=f"Ctrl{i}", decorators=["Get()"]),
         ]
         analyses[f"ctrl{i}.ts"] = _make_analysis(f"ctrl{i}.ts", "typescript", symbols)
 
-    result = _detect_wiring(analyses)
-    assert len(result["route_map"]) == 10
-    assert result["total_route_files"] == 15
+    result = _detect_wiring(analyses, _MEDIUM)
+    assert len(result["route_map"]) == _MEDIUM.max_route_controllers
+    assert result["total_route_files"] == 20
 
 
 def test_wiring_caps_routes_per_controller() -> None:
-    """Controller with 12 routes → capped at 5 with total_routes count."""
+    """Controller with many routes → capped per profile with total_routes count."""
     symbols = [SymbolInfo(name="BigCtrl", kind="class", decorators=["Controller('/api')"])]
-    for i in range(12):
+    for i in range(15):
         method = ["Get", "Post", "Put", "Delete", "Patch"][i % 5]
         symbols.append(SymbolInfo(
             name=f"action{i}", kind="method", parent="BigCtrl",
             decorators=[f"{method}('/r{i}')"],
         ))
     analyses = {"big.ts": _make_analysis("big.ts", "typescript", symbols)}
-    result = _detect_wiring(analyses)
+    result = _detect_wiring(analyses, _MEDIUM)
 
     entry = result["route_map"][0]
-    assert len(entry["routes"]) == 5
-    assert entry["total_routes"] == 12
+    assert len(entry["routes"]) == _MEDIUM.max_routes_per_controller
+    assert entry["total_routes"] == 15
     # All method types should be represented
     methods = {r["method"] for r in entry["routes"]}
     assert len(methods) == 5

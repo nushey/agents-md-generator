@@ -114,7 +114,7 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
 
     # 1. Load config
     config = load_config(project_path)
-    logger.info("Config loaded for %s (impact_threshold=%s)", project_path, config.impact_threshold)
+    logger.info("Config loaded for %s (project_size=%s)", project_path, config.project_size)
 
     # 2. Load cache
     cache = None if force_full_scan else load_cache(project_path)

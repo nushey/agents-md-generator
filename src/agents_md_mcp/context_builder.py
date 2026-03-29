@@ -62,15 +62,6 @@ def _build_interface_impl_map(analyses: dict[str, FileAnalysis]) -> dict[str, li
     return impl_map
 
 
-def _effective_threshold(base_threshold: int, total_files: int) -> int:
-    """Lower aggregation threshold for large projects to collapse more directories."""
-    if total_files > 800:
-        return max(3, base_threshold // 2)
-    if total_files > 400:
-        return max(4, base_threshold - 2)
-    return base_threshold
-
-
 def _deduplicate_methods(entries: list[dict]) -> dict[str, str]:
     """Extract repeated method signatures into a lookup registry.
 
@@ -162,7 +153,8 @@ def build_payload(
         except OSError:
             pass
 
-    threshold = config.impact_threshold
+    profile = config.profile
+    threshold = profile.impact_filter
     changes_payload = []
     full_analysis_payload = []
     test_analysis_payload = []
@@ -226,7 +218,7 @@ def build_payload(
                 })
             else:
                 # No old analysis → treat as new
-                entry = _format_full(change.path, "modified", analysis)
+                entry = _format_full(change.path, "modified", analysis, profile)
                 if entry is None:
                     continue
                 if _is_test_file(change.path):
@@ -235,7 +227,7 @@ def build_payload(
                     full_analysis_payload.append(entry)
 
         elif change.status == "new":
-            entry = _format_full(change.path, "new", analysis)
+            entry = _format_full(change.path, "new", analysis, profile)
             if entry is None:
                 continue
             if _is_test_file(change.path):
@@ -246,12 +238,8 @@ def build_payload(
     # Aggregate production dirs FIRST (before test summaries are mixed in)
     # _aggregate_by_directory expects entries with a "file" key; test_directory_summary
     # entries only have "directory", so they must be added afterwards.
-    # Use adaptive threshold for large projects.
-    agg_threshold = _effective_threshold(
-        config.dir_aggregation_threshold, len(full_analysis_payload)
-    )
     full_analysis_payload = _aggregate_by_directory(
-        full_analysis_payload, agg_threshold
+        full_analysis_payload, profile.dir_aggregation_threshold, profile
     )
 
     # Collapse test files into per-directory summaries and append at the end
@@ -264,7 +252,7 @@ def build_payload(
 
     env_vars = _detect_env_vars(root, config)
     entry_points = _detect_entry_points(root, config)
-    wiring = _detect_wiring(new_analyses)
+    wiring = _detect_wiring(new_analyses, profile)
     interface_impl_map = _build_interface_impl_map(new_analyses)
 
     payload: dict = {

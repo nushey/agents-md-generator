@@ -1,12 +1,14 @@
 """Collapses large sets of similar files into directory-level summaries."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
+from .config import SizeProfile
+
 _COMMON_METHOD_FREQUENCY = 0.6  # method must appear in >= 60% of files to be "common"
-_AGGREGATION_SAMPLE_SIZE = 3    # number of sample files to include in directory summary
 _PATTERN_COVERAGE_THRESHOLD = 0.4  # common methods must cover >= 40% of avg symbols per file
 _DTO_METHOD_RATIO_THRESHOLD = 0.8  # >= 80% of files must have zero methods to be a DTO dir
-_MAX_FILES_PER_LAYER = 5        # cap unaggregated files per directory
 
 
 def _extract_common_methods(entries: list[dict]) -> list[str]:
@@ -114,7 +116,7 @@ def _is_dto_directory(entries: list[dict]) -> bool:
     return (methodless / len(entries)) >= _DTO_METHOD_RATIO_THRESHOLD
 
 
-def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
+def _aggregate_by_directory(entries: list[dict], threshold: int, profile: SizeProfile) -> list[dict]:
     """
     Group full_analysis entries by directory. Directories with >= threshold files
     of the same dominant language are collapsed into a single directory summary.
@@ -141,12 +143,12 @@ def _aggregate_by_directory(entries: list[dict], threshold: int) -> list[dict]:
 
         if len(dominant_entries) < threshold:
             # Not enough files to aggregate — keep individual, capped
-            if len(dir_entries) > _MAX_FILES_PER_LAYER:
-                result.extend(dir_entries[:_MAX_FILES_PER_LAYER])
+            if len(dir_entries) > profile.max_files_per_layer:
+                result.extend(dir_entries[:profile.max_files_per_layer])
                 result.append({
                     "directory": (directory + "/").replace("//", "/"),
                     "kind": "overflow",
-                    "remaining_files": len(dir_entries) - _MAX_FILES_PER_LAYER,
+                    "remaining_files": len(dir_entries) - profile.max_files_per_layer,
                 })
             else:
                 result.extend(dir_entries)

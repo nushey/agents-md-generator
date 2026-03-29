@@ -5,244 +5,226 @@ def _build_instructions(has_existing: bool) -> str:
     """Build the instruction string embedded in the payload."""
     action = "UPDATE the existing" if has_existing else "CREATE a new"
     update_note = (
-        "The existing AGENTS.md content is provided in 'existing_agents_md'. "
-        "Preserve sections that are not affected by the detected changes. "
-        "Only rewrite sections where the analysis shows something changed."
+        "\n\nUPDATE MODE: The current AGENTS.md is in 'existing_agents_md'. "
+        "Preserve sections unaffected by detected changes. "
+        "Rewrite only sections where the analysis shows something changed."
         if has_existing
-        else "Write the complete file from scratch using the analysis data."
+        else ""
     )
 
-    return f"""
+    return f"""\
 TASK: {action} AGENTS.md file at the project root.
 
-## ABSOLUTE RULES — NEVER BREAK THESE
-
-1. DO NOT read any source files. Do not call Read, Glob, Grep, Bash, or any
-   file-reading tool. ALL information needed is already in this payload.
-
-2. DO NOT call generate_agents_md again.
-
-3. DO NOT enumerate files. Never write tables or bullet lists of filenames with
-   their exports. If you find yourself writing "| clients.api.js | getClients, addClient |"
-   — STOP. That is wrong. AGENTS.md is not a file index.
-
-4. Symbol names: use them to INFER patterns, not to produce lists.
-   WRONG: "- AttractionService, IncidentService, TicketService"
-   RIGHT: "Business logic lives in `<Entity>Service` classes under `src/services/`"
-   EXCEPTION — name a symbol explicitly ONLY when it falls into one of these roles:
-     a) Base class that every new file of a type MUST extend (e.g. LogicBase, ApiControllerBase)
-     b) Framework/context class injected into most components (e.g. ZureoContext, DbContext)
-     c) Primary interface that defines a core architectural contract (e.g. IRepository, IUnitOfWork)
-     d) Entry-point or bootstrap class an agent would need to register new code in
-   These are architectural anchors — an agent cannot write correct code without knowing them.
-
-5. DO NOT invent commands, tools, or conventions absent from this payload.
-   If a script is not in build_system.scripts, do not mention it.
-   If a linter is not in config_files_found, do not claim it exists.
-
-6. USE ONLY the data in this payload:
-   - metadata → project name, detected languages (language applies to ALL file entries)
-   - project_structure.top_level_dirs → top-level projects/packages (module inventory source)
-   - project_structure.directories → all directories (use to infer layer structure)
-   - build_system → detected tools, package files, parsed scripts, AND packages
-     (dependency lists per package manager — use to identify specific frameworks,
-     ORMs, and key libraries for Tech Stack)
-   - entry_points → bootstrap/main files per package with their role
-   - env_vars → environment variables referenced in source or .env.example files
-   - full_analysis → public symbols, constructors, methods per file (infer patterns from these)
-   - method_patterns → (if present) lookup table for deduplicated method signatures;
-     when a method in full_analysis is a short key like "m0", resolve it via this table
-   - wiring → (if present) route_map with detected HTTP endpoints per controller/file;
-     use to infer the routing CONVENTION and naming pattern, NOT to enumerate endpoints
-   - interface_impl_map → (if present) maps interface names to their implementors;
-     use to identify core DI contracts and architectural boundaries,
-     name only PRIMARY interfaces (3+ implementors or layer-boundary contracts)
-   - changes → semantic diffs (incremental scans only)
-   - existing_agents_md → current content to preserve or update ({update_note})
-
-## WHAT AGENTS.MD IS — READ THIS BEFORE WRITING ANYTHING
-
 AGENTS.md is a "README for AI coding agents." It gives agents the architectural
-context and operational rules they need to contribute effectively WITHOUT
-exploring the codebase themselves.
+context and rules they need to contribute correctly WITHOUT exploring the codebase.
+It is NOT documentation, NOT a changelog, NOT a file index.{update_note}
 
-It answers:
-  - What is this system and what does it do?
-  - What is the full tech stack (languages, frameworks, key libraries)?
-  - How is this system structured and why?
-  - What conventions must I follow when adding code?
-  - Where exactly do I put a new file of type X?
-  - Which base classes must I extend? Which interfaces must I implement?
-  - What are the key data models and their shapes?
-  - What commands do I run to build, test, lint?
-  - What must I never break?
+===================================================================
+BLOCK 1 -- HARD CONSTRAINTS (never break these)
+===================================================================
 
-It is NOT documentation. It is NOT a changelog. It is NOT a file index.
+1. Use ONLY the data in this payload. Never read source files, never call any
+   file-reading tool (Read, Glob, Grep, Bash), never call generate_agents_md.
+2. Never enumerate files or symbols in lists. Describe PATTERNS and CONVENTIONS.
+   WRONG: "UserService, OrderService, TicketService handle business logic"
+   RIGHT: "Business logic lives in `<Entity>Service` classes under `src/services/`"
+3. Never invent commands, tools, or conventions absent from this payload.
+   If a script is not in build_system.scripts, do not mention it.
+4. Every entry from `project_structure.top_level_dirs` MUST appear in the
+   Project Map table. Zero omissions. This is non-negotiable.
+5. Name a symbol explicitly ONLY when it is an architectural anchor --a class
+   or interface an agent MUST know to write correct code. See Synthesis Rules.
 
-## HOW TO USE THE PAYLOAD DATA
+===================================================================
+BLOCK 2 -- SYNTHESIS RULES (how to transform payload into prose)
+===================================================================
 
-### `full_analysis` — SYNTHESIZE patterns, identify anchors
+PATTERN INFERENCE
+Examine file paths, symbol names, signatures, constructors, and decorators
+across `full_analysis` to detect recurring patterns. Document as rules:
+  - Naming: `clients.api.js`, `orders.api.js` ->"API clients follow `<entity>.api.js`"
+  - Layers: api/ ->services/ ->hooks/ ->pages/ ->document the pipeline
+  - Domains: clients.*, orders.* across layers ->name domains, not files
 
-Examine file paths, symbol names, signatures, constructors, and decorators to:
+ARCHITECTURAL ANCHORS (the only symbols you may name explicitly)
+Three categories:
+  a) Base classes that new files MUST extend (detected: many classes share
+     the same base in their `signature` or `implements` field)
+  b) Context/service classes injected everywhere (detected: same type appears
+     in `constructor_deps` of many classes)
+  c) Primary interfaces defining layer boundaries (detected: entries in
+     `interface_impl_map` with 3+ implementors)
 
-1. Detect recurring patterns → document as RULES
-   - Naming: `clients.api.js`, `orders.api.js` → "API clients follow `<entity>.api.js`"
-   - Layers: api/ → services/ → hooks/ → context/ → pages/ → document as pipeline
-   - Domains: clients.*, orders.* across layers → domain-oriented, list domains not files
+READING AGGREGATED ENTRIES in `full_analysis`
+  - `kind: "directory_summary"` --collapsed directory. Key fields:
+    `common_methods` (signatures shared by 60%+ files = the layer's interface),
+    `naming_pattern` (e.g. `*Service`), `outliers`, `sample_files`
+  - `kind: "dto_container"` --file with only data classes, no logic methods
+  - `kind: "overflow"` --directory exceeded cap; `remaining_files` = hidden count
+  - `kind: "test_directory_summary"` --collapsed test dir with file/function counts
 
-2. Identify architectural anchors (see Rule 4 exceptions) → name them explicitly
-   - Base classes: if many classes share the same base in their signature → name that base
-   - Context classes: if a class appears in constructors of many others → name it
-   - Primary interfaces: if an interface is implemented across the codebase → name it
+METHOD PATTERN LOOKUP
+If `method_patterns` exists in the payload, short keys like "m0" in method
+lists resolve to full signatures via this lookup table.
 
-3. Detect domain model patterns from `is_dto` markers and naming conventions
-   - If many files are marked `is_dto: true` in a specific directory → that's the domain model layer
-   - If directory summaries show a naming_pattern like `*Entity` or `*Model` → document it
-   - Use constructor_deps across the codebase to see which layers CONSUME these entities
+CONDITIONAL SECTIONS
+Include an output section ONLY if the payload has data for it.
+If no frontend files ->omit Frontend Guidelines. If env_vars is empty ->omit
+Environment Variables. Never generate empty or speculative sections.
 
-4. Infer DI patterns from `constructor` fields
-   - If most classes receive dependencies via constructor → document constructor injection as the pattern
-   - If the same types appear repeatedly in constructors → those are the key services/abstractions
+===================================================================
+BLOCK 3 -- OUTPUT SECTIONS (produce in this exact order)
+===================================================================
 
-If you cannot detect a pattern from the data, omit it. Never invent one.
+Each section below specifies SOURCE (payload fields to read), WRITE (what to
+produce), and SKIP (what to omit). Include only sections whose condition is met.
 
-### `wiring.route_map` — infer routing conventions
+---------------------------------------------------
+### 1. Project Overview [REQUIRED]
+---------------------------------------------------
+SOURCE: metadata, build_system (detected, *_packages), entry_points,
+        project_structure.top_level_dirs
+WRITE: 3-5 sentences covering:
+  - What the system does (business purpose, inferred from project name,
+    entry points, and detected frameworks)
+  - Full tech stack with SPECIFIC framework names from packages --say
+    "Python / FastAPI / SQLAlchemy", not just "Python"
+  - Top-level architectural shape (layered, monorepo, microservices, etc.)
+  - If multiple entry points suggest separate applications (e.g. WebApp.ON,
+    WebApp.LITE), name them with their inferred role
+SKIP: File lists. Symbol lists. Directory trees.
 
-If present, examine route paths and HTTP methods to detect:
-- The routing pattern (attribute-based, decorator-based, convention-based, file-based)
-- URL naming conventions (e.g. `/api/<entity>/`, kebab-case, camelCase)
-- Whether routes are grouped by controller class or scattered across files
-Document the CONVENTION in Backend Guidelines or Conventions, not the individual routes.
+---------------------------------------------------
+### 2. Tech Stack [REQUIRED]
+---------------------------------------------------
+SOURCE: metadata.languages_detected, build_system (detected, *_packages),
+        project_structure.config_files_found, project_structure.ci_files_found
+WRITE: Categorized list:
+  - Backend: language, framework, ORM, key libraries (from package lists)
+  - Frontend: framework, UI libs (only if JS/TS detected)
+  - Databases: inferred from packages (e.g. `pg` ->PostgreSQL) or env vars
+  - Infrastructure: CI/CD from ci_files_found, linters from config_files_found
+SKIP: Any category with no detected data. Never guess databases not in payload.
 
-### `interface_impl_map` — identify core contracts
+---------------------------------------------------
+### 3. Project Map [REQUIRED --NON-NEGOTIABLE]
+---------------------------------------------------
+SOURCE: project_structure.top_level_dirs (EVERY entry, no exceptions)
+WRITE: A Markdown table with columns: Module | Purpose
+  - Infer each module's purpose from its name, languages field, kind field,
+    and cross-reference with full_analysis entries under that path
+  - If directories share a strict namespace (e.g. Zureo.Queries.*), you MAY
+    group them into one row, but never omit unique outliers
+  - EVERY top_level_dirs entry must appear --count them before and after
+SKIP: Nested subdirectories. File counts. Language badges.
 
-If present, scan for interfaces with multiple implementors — these define
-architectural boundaries. Name them as architectural anchors (Rule 4c).
-An interface implemented by one class is just a typing detail; an interface
-implemented by 5+ classes is a PATTERN worth documenting.
+---------------------------------------------------
+### 4. Architecture & Data Flow [REQUIRED]
+---------------------------------------------------
+SOURCE: project_structure.directories, full_analysis (directory summaries,
+        constructor_deps), interface_impl_map, wiring.route_map
+WRITE: Narrative describing:
+  - Architectural shape and how data flows through layers
+  - Layer names and flow direction (e.g. Controller ->Service ->Repository ->DB)
+  - Architectural anchor classes/interfaces (from Synthesis Rules)
+  - If interface_impl_map shows contracts with 3+ implementors, name them as
+    layer boundaries
+  - If wiring.route_map exists, describe the routing CONVENTION (attribute-based,
+    decorator-based, file-based) and URL naming pattern --not individual routes
+SKIP: Individual file paths. Individual route listings. Repeating the Project Map.
 
-### Aggregated entries in `full_analysis`
+---------------------------------------------------
+### 5. Key Models [CONDITIONAL: is_dto entries across multiple directories]
+---------------------------------------------------
+SOURCE: full_analysis (is_dto markers, dto_container entries, directory
+        summaries with DTO notes), naming_pattern fields
+WRITE: Domain model PATTERN:
+  - Where domain entities live (directory convention)
+  - Naming convention (from naming_pattern if available)
+  - How entities relate to the architecture (consumed via constructor_deps?
+    implement shared interfaces?)
+  - Pattern for creating a new entity
+SKIP: Listing individual entity names or properties. Omit section entirely
+      if no clear domain model layer is detected.
 
-Not all entries are individual files. Some are directory-level summaries:
-- `kind: "directory_summary"` — a collapsed directory. Key fields:
-  - `common_methods`: method signatures shared by 60%+ of files (the layer's interface pattern)
-  - `naming_pattern`: detected class naming convention (e.g. `*Service`, `*Controller`)
-  - `outliers`: files that deviate from the common pattern
-  - `sample_files`: representative file paths
-- `kind: "dto_container"` — a file with only data classes and no logic methods
-- `kind: "overflow"` — directory exceeded cap; `remaining_files` shows hidden count
-- `kind: "test_directory_summary"` — collapsed test directory with file/function counts
+---------------------------------------------------
+### 6. Backend Guidelines [CONDITIONAL: backend language detected]
+---------------------------------------------------
+SOURCE: full_analysis (symbols, constructor_deps, decorators, common_methods),
+        interface_impl_map, wiring.route_map
+WRITE:
+  - Base classes that MUST be extended --name explicitly, state what each provides
+  - Constructor injection pattern with key injectable types
+  - Required method signatures / lifecycle hooks (from common_methods)
+  - Routing convention: URL pattern, HTTP method mapping, attribute vs decorator
+  - Error handling conventions (from patterns in method signatures)
+  - Transaction / unit-of-work patterns if detected
+  - Data access conventions (ORM, raw SQL, stored procedures)
+  - Security/auth conventions if detected
+SKIP: Frontend concerns. Individual file paths.
 
-Use these to infer layer patterns. A directory_summary with naming_pattern `*Service`
-and common_methods `[execute, validate]` tells you: "services follow a command pattern
-with execute() and validate() as the standard interface."
+---------------------------------------------------
+### 7. Frontend Guidelines [CONDITIONAL: JS/TS files in non-backend context]
+---------------------------------------------------
+SOURCE: full_analysis (JS/TS entries), build_system.npm_packages
+WRITE:
+  - Component structure and naming convention
+  - State management approach (from detected packages)
+  - API communication pattern (HTTP client layer)
+  - Key framework patterns (routing, forms, lifecycle)
+  - Per-package subsections in monorepos if conventions differ
+SKIP: Backend concerns.
 
-### `project_structure.top_level_dirs` — module inventory source of truth
+---------------------------------------------------
+### 8. Conventions & Patterns [REQUIRED if any patterns detected]
+---------------------------------------------------
+SOURCE: full_analysis (naming patterns, directory structure),
+        project_structure.test_directories, project_structure.config_files_found
+WRITE: What is NOT already in Backend/Frontend Guidelines:
+  - File naming rules per layer (exact pattern, exact directory)
+  - Cross-cutting: logging, validation, localization patterns
+  - Test file placement and naming conventions
+SKIP: Anything already covered in earlier sections.
 
-This field lists ONLY the immediate top-level directories of the project.
-Use it as the authoritative list for the module inventory. Every entry must appear.
+---------------------------------------------------
+### 9. How to Add a Feature [CONDITIONAL: clear N-layer pattern in 3+ domains]
+---------------------------------------------------
+SOURCE: Synthesis of all above sections
+WRITE: Exact step-by-step with concrete templates:
+  "1. Create `<Entity>Controller.cs` in `X/` extending `ApiControllerBase`"
+  "2. Create `<Entity>Logic.cs` in `Y/` extending `LogicBase`"
+  etc.
+SKIP: This entire section if the pattern is ambiguous or inconsistent.
+      A wrong guide is worse than no guide.
 
-### `build_system.scripts` — exact commands only
+---------------------------------------------------
+### 10. Environment Variables [CONDITIONAL: env_vars non-empty]
+---------------------------------------------------
+SOURCE: env_vars
+WRITE: One line per variable with its inferred purpose.
+SKIP: Entire section if env_vars is empty.
 
-Copy them verbatim. Use fenced code blocks. Never paraphrase.
+---------------------------------------------------
+### 11. Setup & Build Commands [CONDITIONAL: build_system.scripts non-empty]
+---------------------------------------------------
+SOURCE: build_system.scripts, entry_points
+WRITE: Exact commands in fenced code blocks, copied VERBATIM from payload.
+       Reference entry_points to explain where bootstrap happens.
+SKIP: Paraphrased or invented commands.
 
-## FORMAT (include only sections with real data)
+---------------------------------------------------
+### 12. Testing [CONDITIONAL: test directories or test scripts detected]
+---------------------------------------------------
+SOURCE: project_structure.test_directories, config_files_found (test configs),
+        build_system.scripts (test commands), full_analysis (test_directory_summary)
+WRITE: Test framework, test command, file placement convention, naming convention.
+SKIP: Entire section if nothing detected.
 
-### Project Overview
-3–5 sentences covering:
-- What the system does (business purpose)
-- Full tech stack: backend language + framework, frontend framework, databases, key libraries
-- Top-level architectural shape (layered, domain-driven, monorepo, microservices, etc.)
-No file lists. No symbol lists.
+---------------------------------------------------
+### 13. Keeping AGENTS.md Up to Date [REQUIRED --include verbatim]
+---------------------------------------------------
+Include this section exactly as written:
 
-### Tech Stack
-Explicit list of technologies detected from metadata, build_system, and imports:
-- Backend: language, framework, ORM/data access, key libraries
-- Frontend: framework, key libraries (only if frontend is present)
-- Databases: detected from env_vars, imports, or build files
-- Infrastructure: CI/CD, deployment tools (only if detected in ci_files_found)
-Omit any category with no detected data.
-
-### Architecture & Data Flow
-The most important narrative section. Two mandatory parts:
-
-**Part 1 — Module/project inventory (REQUIRED, no exceptions):**
-Source: `project_structure.top_level_dirs` — use EVERY entry, no omissions.
-For each entry write exactly ONE sentence describing its sole responsibility:
-  - `<module-name>` — <one-sentence purpose>
-Every entry in top_level_dirs must appear here. Missing one is a bug.
-
-**Part 2 — Data flow narrative:**
-Describe the architectural shape and direction data flows through it.
-Layered: name each layer and the flow direction (e.g. Controller → Logic → Repository → DB).
-Domain: name the domains and their boundaries.
-Name the architectural anchor classes/interfaces here if identified (Rule 4 exceptions).
-
-### Key Models (OPTIONAL)
-Only include if full_analysis contains classes/structs marked `is_dto: true`
-across multiple directories, suggesting a clear domain model layer.
-When present, describe the domain model PATTERN:
-- Where domain entities live (directory convention)
-- Naming convention for entities (from naming_pattern if available)
-- How entities relate to the rest of the architecture (are they injected via
-  constructor_deps? do they implement shared interfaces from interface_impl_map?)
-Do NOT list individual entities. Document the PATTERN for creating new ones.
-Omit this section entirely if no clear domain model layer is detected.
-
-### Backend Guidelines
-Only include if a backend is detected. Synthesize from full_analysis:
-- Base classes that MUST be extended for controllers, services, repositories, etc.
-  Name them explicitly (Rule 4a). State what each one provides.
-- Constructor injection pattern if detected — name the key injectable services (Rule 4b/c).
-  Use interface_impl_map to identify the core DI contracts binding the architecture.
-- Routing convention if wiring.route_map is present — describe the URL pattern,
-  HTTP method mapping, and whether routes are attribute/decorator/convention-based.
-- Required method signatures or lifecycle hooks (e.g. RegisterRoutes(), OnInit())
-- Error handling conventions (from patterns detected in method signatures)
-- Transaction/unit-of-work patterns if detected (idTrans, IUnitOfWork, etc.)
-- Data access conventions (ORM pattern, raw SQL, stored procedures, etc.)
-- Security/auth conventions (permission checks, middleware patterns)
-
-### Frontend Guidelines
-Only include if a frontend is present (JS/TS files detected). For monorepos:
-write a separate subsection per frontend package if they differ in conventions.
-Cover:
-- Module/component structure (directory layout, naming pattern)
-- State management approach (if detected from imports or patterns)
-- Communication with backend (HTTP client pattern, API layer)
-- Key UI framework patterns (component lifecycle, routing, forms)
-- Naming conventions specific to the frontend layer
-
-### Conventions & Patterns
-THE most actionable section. Cover what is not already in Backend/Frontend Guidelines:
-- File naming rules per layer (exact pattern, exact directory)
-- Cross-cutting concerns: logging, validation, localization patterns
-- Test file placement and naming conventions (if test_directories detected)
-
-### How to Add a Feature (OPTIONAL)
-Include ONLY if the full_analysis reveals a clear, consistent N-layer pattern
-that repeats across 3+ domains. If the pattern is ambiguous or inconsistent, OMIT this section entirely — a wrong guide is worse than no guide.
-When present, write the exact step-by-step for adding a new feature end-to-end,
-referencing the detected pattern:
-  1. Create `<Entity>Controller.cs` in `X/` extending `ApiControllerBase`
-  2. Create `<Entity>Logic.cs` in `Y/` extending `LogicBase`
-  3. ...
-
-### Environment Variables
-Only if env_vars is non-empty. One line per variable describing its purpose.
-
-### Setup & Build Commands
-Exact commands from build_system. Fenced code blocks. No paraphrasing.
-Reference entry_points to explain where bootstrap happens.
-
-### Testing
-From test_directories + config_files_found + build_system.scripts test entries.
-Skip entirely if nothing detected.
-
-### Keeping AGENTS.md Up to Date
-ALWAYS include this section verbatim at the end:
-
-```
 ## Keeping AGENTS.md Up to Date
 
 This file is generated and maintained by the `agents-md-generator` MCP tool.
@@ -253,19 +235,18 @@ This file is generated and maintained by the `agents-md-generator` MCP tool.
 The assistant will invoke the `generate_agents_md` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".
-```
 
-## QUALITY BAR
+===================================================================
+BLOCK 4 -- QUALITY CHECKLIST (verify before producing output)
+===================================================================
 
-- Project Overview must state the tech stack explicitly — framework names, not just language names.
-  Use build_system.packages to identify specific libraries (ORMs, test frameworks, UI libs).
-- Module inventory must include EVERY entry from top_level_dirs. Zero omissions.
-- Backend Guidelines must name base classes and context classes an agent must use.
-- Key Models must describe the domain model PATTERN (directory, naming, relationships) — never list entities.
-- Conventions must be actionable: agent knows exactly what to create, where, what to extend.
-- Every command must be exact and runnable. No placeholders.
-- Zero file enumeration tables. Zero symbol-list bullets (except Rule 4 exceptions).
-- How to Add a Feature: include only when pattern is unambiguous — omit when uncertain.
-- Minimum depth: a developer unfamiliar with this codebase should be able to add
-  a feature correctly after reading this document, without opening a single source file.
-""".strip()
+1. Project Overview names SPECIFIC frameworks (from packages), not just languages.
+2. Project Map includes EVERY entry from top_level_dirs --count them.
+3. Backend Guidelines names base classes and context classes by symbol name.
+4. Key Models describes the PATTERN --never lists individual entities.
+5. Every convention is actionable: agent knows what to create, where, what to extend.
+6. Every command is exact and runnable --no placeholders, no paraphrasing.
+7. Zero file enumeration tables. Zero symbol-list bullets (except anchors).
+8. How to Add a Feature is present ONLY when pattern is unambiguous.
+9. A developer unfamiliar with this codebase can add a feature correctly after
+   reading this document, without opening a single source file.""".strip()

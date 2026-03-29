@@ -313,17 +313,17 @@ def _build_response(
         "total_chunks": num_chunks,
         "agents_md_path": str(agents_md_path),
         "instructions": (
-            f"The codebase analysis is complete. Follow these steps EXACTLY — "
+            f"The codebase analysis is complete. Follow these steps EXACTLY -- "
             f"do NOT deviate, ask questions, or read any other files:\n\n"
-            f"STEP 1 — Retrieve the full payload by calling the get_payload_chunk tool "
+            f"STEP 1 -- Retrieve the full payload by calling the get_payload_chunk tool "
             f"repeatedly with project_path='{project_path}' and chunk_index starting at 0. "
             f"Each response contains a 'has_more' field. Keep calling with the next "
             f"chunk_index until has_more is false. Accumulate all 'data' fields in order.\n\n"
-            f"STEP 2 — Concatenate the accumulated data strings and parse the result as JSON. "
-            f"Use ONLY this data to generate AGENTS.md. The payload contains an 'instructions' "
-            f"field with the exact format requirements.\n\n"
-            f"STEP 3 — Write the generated AGENTS.md to: {agents_md_path}\n\n"
-            f"STEP 4 — Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
+            f"STEP 2 -- The concatenated data is the full analysis payload. Read the "
+            f"'instructions' field FIRST -- it contains the exact format and rules for "
+            f"writing AGENTS.md. Then use the remaining fields as your data source.\n\n"
+            f"STEP 3 -- Write the generated AGENTS.md to: {agents_md_path}\n\n"
+            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
             f"IMPORTANT: Do not read any source files. Do not call generate_agents_md again. "
             f"Do not ask the user for anything. Complete all 4 steps autonomously."
         ),

@@ -1,0 +1,31 @@
+{
+  "project_size": "small",
+  "exclude": [
+    "**/node_modules/**",
+    "**/bin/**",
+    "**/obj/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/__pycache__/**",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.bundle.js",
+    "**/vendor/**",
+    "**/packages/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/bower_components/**",
+    "**/app/lib/**",
+    "**/wwwroot/lib/**",
+    "**/wwwroot/libs/**",
+    "**/static/vendor/**",
+    "**/public/vendor/**",
+    "**/assets/vendor/**",
+    "**/site-packages/**"
+  ],
+  "include": [],
+  "languages": "auto",
+  "agents_md_path": "./AGENTS.md",
+  "max_file_size_bytes": 1048576
+}

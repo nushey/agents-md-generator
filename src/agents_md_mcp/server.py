@@ -18,6 +18,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Context
 
 from .ast_analyzer import analyze_changes
 from .cache import (
@@ -32,6 +33,7 @@ from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
 from .symbol_utils import _is_public, _is_test_file
+from .connectors import build_connector_instruction, get_connector_spec
 from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
@@ -55,6 +57,17 @@ def _compute_total_chunks(payload_text: str, compact: bool) -> int:
     return (lines + CHUNK_LINES - 1) // CHUNK_LINES
 
 
+def _get_client_name(ctx: Context) -> str | None:
+    """Extract the client name from the MCP initialize handshake, or None."""
+    try:
+        client_params = ctx.session.client_params
+        if client_params and client_params.clientInfo:
+            return client_params.clientInfo.name
+    except Exception:
+        pass
+    return None
+
+
 mcp = FastMCP("agents_md_mcp")
 
 _server = getattr(mcp, "_mcp_server", None)
@@ -72,7 +85,7 @@ if _server is not None:
         "openWorldHint": False,
     },
 )
-async def scan_codebase(params: ScanCodebaseInput) -> str:
+async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     """Scan and analyze a codebase with tree-sitter, then write the payload to disk.
 
     This tool performs all heavy analysis locally (AST parsing, change detection,
@@ -102,14 +115,21 @@ async def scan_codebase(params: ScanCodebaseInput) -> str:
     if not project_path.is_dir():
         return json.dumps({"error": f"Project path is not a directory: {project_path}"})
 
+    # Extract client name from MCP initialize handshake
+    client_name = _get_client_name(ctx)
+    if client_name:
+        logger.info("MCP client identified: %s", client_name)
+
     try:
-        return await _run_pipeline(project_path, params.force_full_scan)
+        return await _run_pipeline(project_path, params.force_full_scan, client_name)
     except Exception as exc:
         logger.exception("Pipeline failed for %s", project_path)
         return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"})
 
 
-async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
+async def _run_pipeline(
+    project_path: Path, force_full_scan: bool, client_name: str | None = None
+) -> str:
     """Execute the full analysis pipeline. Returns a small response JSON."""
 
     # 1. Load config
@@ -207,7 +227,7 @@ async def _run_pipeline(project_path: Path, force_full_scan: bool) -> str:
     # 8. Return small response with instructions to call read_payload_chunk
     num_chunks = _compute_total_chunks(payload_json, compact)
     return json.dumps(
-        _build_response(payload_path, num_chunks, agents_md_path, project_path),
+        _build_response(payload_path, num_chunks, agents_md_path, project_path, client_name),
         indent=2,
     )
 
@@ -305,8 +325,20 @@ def _build_response(
     num_chunks: int,
     agents_md_path: Path,
     project_path: Path,
+    client_name: str | None = None,
 ) -> dict:
     """Build the small response that instructs the agent to use read_payload_chunk."""
+
+    connector_spec = get_connector_spec(client_name)
+    connector_step = ""
+    if connector_spec:
+        connector_step = (
+            "\n\n"
+            + build_connector_instruction(connector_spec, agents_md_path, project_path)
+        )
+        total_steps = "5"
+    else:
+        total_steps = "4"
 
     return {
         "status": "ready",
@@ -323,9 +355,10 @@ def _build_response(
             f"'instructions' field FIRST -- it contains the exact format and rules for "
             f"writing AGENTS.md. Then use the remaining fields as your data source.\n\n"
             f"STEP 3 -- Write the generated AGENTS.md to: {agents_md_path}\n\n"
-            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
+            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'"
+            f"{connector_step}\n\n"
             f"IMPORTANT: Do not read any source files. Do not call scan_codebase again. "
-            f"Do not ask the user for anything. Complete all 4 steps autonomously."
+            f"Do not ask the user for anything. Complete all {total_steps} steps autonomously."
         ),
     }
 

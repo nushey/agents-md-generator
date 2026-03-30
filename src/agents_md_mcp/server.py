@@ -33,7 +33,7 @@ from .change_detector import detect_changes
 from .config import load_config
 from .context_builder import build_payload
 from .symbol_utils import _is_public, _is_test_file
-from .connectors import build_connector_instruction, get_connector_spec
+from .connectors import setup_connectors, get_connector_spec
 from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
@@ -117,8 +117,7 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
 
     # Extract client name from MCP initialize handshake
     client_name = _get_client_name(ctx)
-    if client_name:
-        logger.info("MCP client identified: %s", client_name)
+    logger.info("MCP client: %s (connector: %s)", client_name or "unknown", "yes" if get_connector_spec(client_name) else "no")
 
     try:
         return await _run_pipeline(project_path, params.force_full_scan, client_name)
@@ -329,16 +328,8 @@ def _build_response(
 ) -> dict:
     """Build the small response that instructs the agent to use read_payload_chunk."""
 
-    connector_spec = get_connector_spec(client_name)
-    connector_step = ""
-    if connector_spec:
-        connector_step = (
-            "\n\n"
-            + build_connector_instruction(connector_spec, agents_md_path, project_path)
-        )
-        total_steps = "5"
-    else:
-        total_steps = "4"
+    # Auto-modify connector files if possible
+    setup_connectors(project_path, agents_md_path, client_name)
 
     return {
         "status": "ready",
@@ -355,10 +346,9 @@ def _build_response(
             f"'instructions' field FIRST -- it contains the exact format and rules for "
             f"writing AGENTS.md. Then use the remaining fields as your data source.\n\n"
             f"STEP 3 -- Write the generated AGENTS.md to: {agents_md_path}\n\n"
-            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'"
-            f"{connector_step}\n\n"
+            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
             f"IMPORTANT: Do not read any source files. Do not call scan_codebase again. "
-            f"Do not ask the user for anything. Complete all {total_steps} steps autonomously."
+            f"Do not ask the user for anything. Complete all 4 steps autonomously."
         ),
     }
 

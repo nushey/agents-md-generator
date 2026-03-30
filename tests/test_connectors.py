@@ -1,11 +1,10 @@
-"""Tests for connectors.py — agent connector file mapping."""
-
+import json
 from pathlib import Path
 
 from agents_md_mcp.connectors import (
     ConnectorSpec,
-    build_connector_instruction,
     get_connector_spec,
+    setup_connectors,
 )
 from agents_md_mcp.server import _build_response
 
@@ -17,14 +16,14 @@ def test_get_connector_spec_claude() -> None:
     spec = get_connector_spec("claude-code")
     assert spec is not None
     assert spec.file_path == "CLAUDE.md"
-    assert "@AGENTS.md" in spec.reference_line
+    assert "{file}" in spec.reference_template
 
 
-def test_get_connector_spec_gemini() -> None:
-    spec = get_connector_spec("gemini-cli")
+def test_get_connector_spec_cursor() -> None:
+    spec = get_connector_spec("cursor")
     assert spec is not None
-    assert spec.file_path == ".gemini/GEMINI.md"
-    assert spec.dir_path == ".gemini"
+    assert spec.file_path == ".cursorrules"
+    assert "{file}" in spec.reference_template
 
 
 def test_get_connector_spec_case_insensitive() -> None:
@@ -40,87 +39,94 @@ def test_get_connector_spec_none_returns_none() -> None:
     assert get_connector_spec(None) is None
 
 
-# ── build_connector_instruction ───────────────────────────────────────────────
+# ── setup_connectors ─────────────────────────────────────────────────────────
 
 
-def test_build_connector_instruction_contains_path() -> None:
-    spec = ConnectorSpec(
-        file_path="CLAUDE.md",
-        dir_path=None,
-        reference_line="@AGENTS.md",
-        comment_prefix="<!--",
-    )
-    result = build_connector_instruction(
-        spec,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
-    )
-    assert "CLAUDE.md" in result
-    assert "@AGENTS.md" in result
-    assert "STEP 5" in result
+def test_setup_connectors_creates_file_for_known_client(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    setup_connectors(tmp_path, agents_md, client_name="claude-code")
+    claude_md = tmp_path / "CLAUDE.md"
+    assert claude_md.exists()
+    assert "@AGENTS.md" in claude_md.read_text()
 
 
-def test_build_connector_instruction_mentions_existing_file() -> None:
-    spec = get_connector_spec("claude-code")
-    result = build_connector_instruction(
-        spec,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
-    )
-    assert "ALREADY exists" in result
-    assert "prepend" in result
-    assert "Do NOT remove" in result
+def test_setup_connectors_creates_file_for_cursor(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    setup_connectors(tmp_path, agents_md, client_name="cursor")
+    cursorrules = tmp_path / ".cursorrules"
+    assert cursorrules.exists()
+    assert "AGENTS.md" in cursorrules.read_text()
 
 
-# ── _build_response integration ───────────────────────────────────────────────
+def test_setup_connectors_creates_dir_and_file_for_copilot(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    setup_connectors(tmp_path, agents_md, client_name="copilot")
+    copilot_md = tmp_path / ".github" / "copilot-instructions.md"
+    assert copilot_md.parent.is_dir()
+    assert copilot_md.exists()
+    assert "AGENTS.md" in copilot_md.read_text()
 
 
-def test_build_response_without_client_has_4_steps() -> None:
+def test_setup_connectors_prepends_to_existing_file(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    claude_md = tmp_path / "CLAUDE.md"
+    claude_md.write_text("Existing content here.", encoding="utf-8")
+    
+    setup_connectors(tmp_path, agents_md, client_name="claude-code")
+    
+    content = claude_md.read_text(encoding="utf-8")
+    assert "@AGENTS.md" in content
+    assert "Existing content here." in content
+    assert content.startswith("@AGENTS.md")
+
+
+def test_setup_connectors_uses_custom_agents_md_filename(tmp_path: Path) -> None:
+    custom_md = tmp_path / "CUSTOM_RULES.md"
+    setup_connectors(tmp_path, custom_md, client_name="claude-code")
+    claude_md = tmp_path / "CLAUDE.md"
+    assert "@CUSTOM_RULES.md" in claude_md.read_text()
+
+
+def test_setup_connectors_does_not_duplicate_reference(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    cursorrules = tmp_path / ".cursorrules"
+    ref = "See AGENTS.md for project context and rules."
+    cursorrules.write_text(f"{ref}\nExisting content.", encoding="utf-8")
+    
+    setup_connectors(tmp_path, agents_md, client_name="cursor")
+    
+    content = cursorrules.read_text(encoding="utf-8")
+    # Should only appear once
+    assert content.count("AGENTS.md") == 1
+
+
+def test_setup_connectors_auto_detects_multiple_agents(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    # Set up multiple project structures
+    (tmp_path / "CLAUDE.md").write_text("Old stuff", encoding="utf-8")
+    (tmp_path / ".cursorrules").write_text("Old cursor rules", encoding="utf-8")
+    (tmp_path / ".gemini").mkdir()
+    
+    # Run without a specific client name
+    setup_connectors(tmp_path, agents_md, client_name=None)
+    
+    # All should be updated if their files or directories existed
+    assert "@AGENTS.md" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "AGENTS.md" in (tmp_path / ".cursorrules").read_text(encoding="utf-8")
+    assert "@AGENTS.md" in (tmp_path / ".gemini" / "GEMINI.md").read_text(encoding="utf-8")
+
+
+# ── _build_response (integration) ─────────────────────────────────────────────
+
+
+def test_build_response_calls_setup_connectors(tmp_path: Path) -> None:
     response = _build_response(
-        payload_path=Path("/cache/payload.json"),
-        num_chunks=1,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
-        client_name=None,
-    )
-    assert "STEP 5" not in response["instructions"]
-    assert "all 4 steps" in response["instructions"]
-
-
-def test_build_response_with_unknown_client_has_4_steps() -> None:
-    response = _build_response(
-        payload_path=Path("/cache/payload.json"),
-        num_chunks=1,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
-        client_name="unknown-agent",
-    )
-    assert "STEP 5" not in response["instructions"]
-    assert "all 4 steps" in response["instructions"]
-
-
-def test_build_response_with_claude_has_5_steps() -> None:
-    response = _build_response(
-        payload_path=Path("/cache/payload.json"),
-        num_chunks=1,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
+        payload_path=tmp_path / "payload.json",
+        num_chunks=2,
+        agents_md_path=tmp_path / "AGENTS.md",
+        project_path=tmp_path,
         client_name="claude-code",
     )
-    assert "STEP 5" in response["instructions"]
-    assert "CLAUDE.md" in response["instructions"]
-    assert "@AGENTS.md" in response["instructions"]
-    assert "all 5 steps" in response["instructions"]
 
-
-def test_build_response_with_gemini_has_5_steps() -> None:
-    response = _build_response(
-        payload_path=Path("/cache/payload.json"),
-        num_chunks=1,
-        agents_md_path=Path("/project/AGENTS.md"),
-        project_path=Path("/project"),
-        client_name="gemini-cli",
-    )
-    assert "STEP 5" in response["instructions"]
-    assert ".gemini/GEMINI.md" in response["instructions"]
-    assert "all 5 steps" in response["instructions"]
+    assert response["status"] == "ready"
+    assert (tmp_path / "CLAUDE.md").exists()

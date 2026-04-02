@@ -17,54 +17,37 @@ Python · C# · TypeScript · JavaScript · Go
 
 See [INSTALLATION.md](https://github.com/nushey/agents-md-generator/blob/main/INSTALLATION.md) for the full guide including prerequisites and troubleshooting.
 
-**Requirements:** Python 3.11+, [uv](https://github.com/astral-sh/uv), Git, and any MCP-compatible client.
+**Requirements:** Python 3.11+, Git, and any MCP-compatible client.
 
-### Claude Code
+### Option A — pip install + setup wizard (recommended)
+
+```bash
+pip install agents-md-generator
+agents-md-generator setup
+```
+
+The setup wizard detects your installed clients, asks whether to configure globally or per-project, and patches the config files automatically. Supports Claude Code, Gemini CLI, Cursor, Windsurf, and Codex CLI.
+
+### Option B — uvx (no install needed)
+
+If you have [uv](https://github.com/astral-sh/uv) installed, `uvx` runs the package without a prior install step. Add the entry manually to your client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
+
+For Claude Code specifically:
 
 ```bash
 claude mcp add agents-md uvx agents-md-generator
 ```
-
-Or add it manually to `~/.claude.json` (Linux/macOS) or `%USERPROFILE%\.claude.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "uvx",
-      "args": ["agents-md-generator"]
-    }
-  }
-}
-```
-
-### Gemini CLI
-
-Add it to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "uvx",
-      "args": ["agents-md-generator"]
-    }
-  }
-}
-```
-
-### Other MCP clients (Cursor, Windsurf, etc.)
-
-The server uses stdio transport. Add this entry to your client's MCP config under `mcpServers`:
-
-```json
-"agents-md": {
-  "command": "uvx",
-  "args": ["agents-md-generator"]
-}
-```
-
-Restart your client — `uvx` downloads the package automatically on first run.
 
 ---
 

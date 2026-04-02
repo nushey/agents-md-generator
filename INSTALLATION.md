@@ -1,6 +1,6 @@
 # Installation Guide
 
-Step-by-step setup for Linux, macOS, and Windows. Works with Claude Code, Gemini CLI, Cursor, Windsurf, and any other MCP-compatible client.
+Step-by-step setup for Linux, macOS, and Windows. Works with Claude Code, Gemini CLI, Cursor, Windsurf, Codex CLI, and any other MCP-compatible client.
 
 ---
 
@@ -34,31 +34,7 @@ python --version
 
 ---
 
-### 2. uv (includes uvx)
-
-`uvx` downloads and runs Python tools in isolated environments — no virtual environment management needed.
-
-**Linux / macOS**
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**Windows (PowerShell)**
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Restart your terminal after installing, then verify:
-
-```bash
-uvx --version
-```
-
----
-
-### 3. Git
+### 2. Git
 
 Required for incremental scanning. `agents-md-generator` uses `git ls-files` to enumerate tracked files.
 
@@ -81,60 +57,93 @@ Download from [git-scm.com](https://git-scm.com/download/win) and run the instal
 
 ---
 
-### 4. An MCP-compatible client
+### 3. An MCP-compatible client
 
 Install at least one of the supported clients before proceeding.
 
 ---
 
-## Configure your client
+## Option A — pip install + setup wizard (recommended)
 
-Add `agents-md-generator` to your client's MCP server list. The config block is the same for all clients — only the file location differs.
+Install the package once and use the interactive wizard to configure all your clients automatically.
 
-```json
-{
-  "mcpServers": {
-    "agents-md": {
-      "command": "uvx",
-      "args": ["agents-md-generator"]
-    }
-  }
-}
+```bash
+pip install agents-md-generator
+agents-md-generator setup
 ```
 
-If `mcpServers` already exists in your config file, add only the `"agents-md"` entry inside it.
+The wizard will:
+
+1. Detect which MCP clients are installed on your system
+2. Ask whether to configure **globally** (all projects) or **locally** (current project only)
+3. Patch the config files for each client you select
+
+**Supported clients:** Claude Code, Gemini CLI, Cursor, Windsurf, Codex CLI.
+
+After setup, restart your clients and skip to [Verify](#verify).
+
+---
+
+## Option B — uvx (no install needed)
+
+If you have [uv](https://github.com/astral-sh/uv) installed, `uvx` runs the package without a prior install step.
+
+**Install uv**
+
+Linux / macOS:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Restart your terminal after installing, then verify:
+
+```bash
+uvx --version
+```
+
+Then configure your client manually:
 
 ---
 
 ### Claude Code
 
-**Quick install (recommended)**
-
 ```bash
 claude mcp add agents-md uvx agents-md-generator
 ```
 
-**Manual config file location**
+Or add manually to your config file:
 
 | Platform | Path |
 |----------|------|
 | Linux / macOS | `~/.claude.json` |
 | Windows | `%USERPROFILE%\.claude.json` |
 
-Restart Claude Code after saving the config.
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
 
 ---
 
 ### Gemini CLI
 
-**Config file location**
-
 | Platform | Path |
 |----------|------|
 | Linux / macOS | `~/.gemini/settings.json` |
 | Windows | `%USERPROFILE%\.gemini\settings.json` |
-
-Create the file if it does not exist, then add the `mcpServers` block:
 
 ```json
 {
@@ -147,17 +156,54 @@ Create the file if it does not exist, then add the `mcpServers` block:
 }
 ```
 
-Restart Gemini CLI after saving.
-
 ---
 
 ### Cursor
 
-Add the entry to `.cursor/mcp.json` in your project root (project-scoped) or to the global Cursor settings under **Settings → MCP**.
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` in your project root (project-scoped):
+
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
 
 ---
 
-### Other clients (Windsurf, Continue, etc.)
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "agents-md": {
+      "command": "uvx",
+      "args": ["agents-md-generator"]
+    }
+  }
+}
+```
+
+---
+
+### Codex CLI
+
+Add to `~/.codex/config.toml` (global) or `.codex/config.toml` in your project root (project-scoped):
+
+```toml
+[mcp_servers.agents-md]
+command = "agents-md-generator"
+```
+
+---
+
+### Other clients
 
 Any client that supports stdio MCP servers will work. Consult your client's documentation for the config file location and add the `"agents-md"` entry under `mcpServers`.
 
@@ -165,18 +211,17 @@ Any client that supports stdio MCP servers will work. Consult your client's docu
 
 ## Verify
 
-On first start, `uvx` downloads the package and its dependencies automatically — this takes a few seconds only once.
-
 Open any project and ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
 The client should call `generate_agents_md` automatically. If the tool does not appear:
 
-1. Verify the JSON is valid — no trailing commas, correct quotes
-2. Restart your client completely
-3. Check that `uvx --version` works in your terminal
-4. Check the MCP panel or logs in your client for server errors
+1. Restart your client completely after any config change
+2. Verify the config file is valid — no trailing commas or incorrect quotes in JSON; valid TOML syntax for Codex
+3. For Option A: confirm `agents-md-generator --version` works in your terminal
+4. For Option B: confirm `uvx --version` works in your terminal
+5. Check the MCP panel or logs in your client for server errors
 
 ---
 
@@ -200,15 +245,19 @@ Each project gets its own subdirectory identified by a hash of its absolute path
 
 ## Troubleshooting
 
+### `agents-md-generator: command not found`
+
+The package is not installed or not on your PATH. Run `pip install agents-md-generator` and restart your terminal.
+
 ### `uvx: command not found`
 
-uv is not installed or not on your PATH. Run the install command above and restart your terminal.
+uv is not installed or not on your PATH. Run the install command in [Option B](#option-b--uvx-no-install-needed) and restart your terminal.
 
 ### Tool does not appear in your client
 
-- Confirm the JSON in your config file is valid — no trailing commas, correct quotes
 - Restart your client completely after any config change
-- Check that `uvx --version` works in your terminal
+- Confirm the config file is valid — no trailing commas or incorrect quotes in JSON; valid TOML syntax for Codex
+- Run `agents-md-generator --version` (Option A) or `uvx --version` (Option B) to confirm the binary is accessible
 - Check your client's MCP panel or logs for server errors
 
 ### Cache is stale after moving the project directory

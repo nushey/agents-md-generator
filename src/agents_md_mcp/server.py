@@ -428,7 +428,7 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--transport", default="stdio", choices=["stdio", "streamable-http"])
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
     parser.add_argument("--host", default="0.0.0.0")
     args, _ = parser.parse_known_args()
 

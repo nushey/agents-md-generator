@@ -5,7 +5,7 @@ MCP server that analyzes codebases with [tree-sitter](https://tree-sitter.github
 
 Compatible with any MCP-capable client: Claude Code, Gemini CLI, Cursor, Windsurf, and others.
 
-**How it works:** The server does all the heavy lifting locally — AST parsing, incremental change detection, environment variable scanning, entry point detection. It writes a compact structured payload to disk and returns step-by-step instructions to your AI client. The client reads the payload and writes `AGENTS.md`. No large data travels over the MCP wire.
+**How it works:** The server exposes three tools with a clear separation of concerns. `generate_agents_md` is the main entry point — it runs the analysis pipeline internally, embeds writing rules into the payload, and returns chunked read instructions to your client. `scan_codebase` is a standalone context tool for when you want deep codebase understanding without generating any file. `read_payload_chunk` streams the payload back in chunks regardless of which tool produced it. No large data travels over the MCP wire.
 
 ## Supported Languages
 
@@ -74,16 +74,39 @@ Once registered, ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
-The client will call `scan_codebase` automatically.
+The client will call `generate_agents_md` automatically. To scan a different directory:
+
+> "Generate the AGENTS.md for the project at /path/to/project"
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `generate_agents_md` | Main entry point. Runs the pipeline internally, embeds writing rules into the payload, and returns chunked read instructions. Use this to create or update `AGENTS.md`. |
+| `scan_codebase` | Standalone context tool. Analyzes the codebase and returns a pure data payload with no `AGENTS.md` mandate. Use this when you need architectural context for any other task. |
+| `read_payload_chunk` | Streams the payload written by either tool in chunks until `has_more` is false. |
 
 ### Tool Parameters
+
+**`generate_agents_md`**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project_path` | string | `"."` | Path to the project root |
-| `force_full_scan` | boolean | `false` | Ignore cache and rescan everything from scratch |
 
-> **Note on `force_full_scan`:** Use this only when explicitly requested. When asking Claude to _improve_ or _update_ an existing `AGENTS.md`, leave it as `false` — the incremental scan already provides all the data needed.
+**`scan_codebase`**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_path` | string | `"."` | Path to the project root |
+| `force_full_scan` | boolean | `true` | Ignore cache and rescan everything. Defaults to `true` — direct calls always perform a full scan. |
+
+**`read_payload_chunk`**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_path` | string | `"."` | Must match the path used in the preceding tool call |
+| `chunk_index` | integer | — | Zero-based chunk index. Increment until `has_more` is false |
 
 ---
 
@@ -115,14 +138,20 @@ Sections with no detected data are omitted entirely.
 
 ### How Large Payloads Are Streamed
 
-For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through a second tool: `read_payload_chunk`.
+For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through `read_payload_chunk`.
 
-**Flow:**
+**`generate_agents_md` flow:**
 
-1. `scan_codebase` runs the full analysis, writes the payload to disk, and returns a small response with `total_chunks` and instructions
-2. The client calls `read_payload_chunk(project_path, chunk_index=0)`, then increments `chunk_index` until the response contains `has_more: false`
-3. The client concatenates all `data` fields in order and parses the result as JSON
+1. `generate_agents_md` runs the pipeline internally, writes the payload to disk (including `AGENTS.md` writing rules), and returns `total_chunks` with read instructions
+2. The client calls `read_payload_chunk(project_path, chunk_index=0)`, then increments `chunk_index` until `has_more` is false
+3. The client concatenates all `data` fields — the payload contains the rules and analysis data needed to write `AGENTS.md`
 4. The payload file is automatically deleted after the last chunk is read
+
+**`scan_codebase` flow** (pure context, no `AGENTS.md` mandate):
+
+1. `scan_codebase` runs the analysis and writes a pure data payload to disk
+2. Same chunked read via `read_payload_chunk`
+3. The client uses the payload for any purpose — code review, planning, Q&A
 
 This flow is pure MCP — no filesystem access required from the client side. Any MCP-compatible client can follow it.
 
@@ -191,6 +220,12 @@ Create `.agents-config.json` at your project root to customize behavior. This fi
 
 You can commit `.agents-config.json` to share settings with your team.
 
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTS_MD_LOG_LEVEL` | `INFO` | Server log verbosity. Set to `DEBUG` to see per-file analysis details. Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
 ### Project Size Profiles
 
 The `project_size` setting controls how aggressively the payload is compressed. A single knob tunes all internal caps — methods per class, symbols per file, directory aggregation, route caps, tree depth, and impact filtering.
@@ -249,7 +284,7 @@ For large codebases, the tool applies several heuristics to ensure the payload r
 - **Boilerplate Suppression:** Common directories like `Migrations`, `bin`, `obj`, and `Properties` are automatically flagged and collapsed in the project structure, preventing them from bloating the directory listing.
 - **Low-Entropy Summarization:** Files that primarily contain data structures (DTOs, Entities) with no logic methods are "minified". Instead of listing every property, the tool provides a high-level summary (e.g., "Contains 25 DTO classes").
 - **Semantic Clustering:** The aggregator groups these minified summaries at the directory level, allowing the consuming AI to understand entire data layers through a single line of signal.
-- **Instruction Prioritization:** Foundation mandates (instructions) are placed at the very top of the payload, ensuring the AI agent understands the project's "Rules of Engagement" before processing the code architecture.
+- **Instruction Embedding:** When called via `generate_agents_md`, writing rules are embedded directly in the payload so the AI agent reads the "Rules of Engagement" before processing the code architecture. Direct `scan_codebase` calls return pure data with no mandate.
 
 ---
 

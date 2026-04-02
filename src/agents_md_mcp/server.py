@@ -100,7 +100,7 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     refactoring, planning, Q&A). To generate or update AGENTS.md specifically, use
     generate_agents_md instead — it orchestrates the full workflow automatically.
 
-    Supported languages: Python, C#, TypeScript, JavaScript, Go, Java, Rust, Ruby.
+    Supported languages: Python, C#, TypeScript, JavaScript, Go.
 
     Args:
         params (ScanCodebaseInput): Input parameters containing:

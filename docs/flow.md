@@ -1,10 +1,52 @@
 # Flujo completo de ejecución
 
-Este documento describe qué pasa desde que el cliente MCP invoca `scan_codebase` hasta que AGENTS.md queda escrito en el disco.
+Este documento describe los dos flujos disponibles: `generate_agents_md` para crear o actualizar AGENTS.md, y `scan_codebase` para obtener contexto puro del codebase.
 
 ---
 
-## Visión general
+## Flujo 1 — generate_agents_md (creación/actualización de AGENTS.md)
+
+```
+Cliente MCP
+    │
+    │  MCP call: generate_agents_md({ project_path })
+    ▼
+server.py → generate_agents_md()
+    │
+    ├─ config.py       → load_config()
+    ├─ connectors.py   → setup_connectors()   ← actualiza CLAUDE.md, .cursorrules, etc.
+    │
+    ▼
+server.py → _run_pipeline(force_full_scan=False, include_agents_md_context=True)
+    │
+    ├─ 1. config.py          → load_config()
+    ├─ 2. cache.py           → load_cache() + is_cache_valid()
+    ├─ 3. change_detector.py → detect_changes()
+    ├─ 4. ast_analyzer.py    → analyze_changes()
+    ├─ 5. context_builder.py → build_payload(include_agents_md_context=True)
+    │       └─ instructions.py → _build_instructions()   ← inyectado en el payload
+    │       └─ lee AGENTS.md existente si hay            ← inyectado en el payload
+    ├─ 6. cache.py           → save_cache()
+    └─ 7. disco              → payload.json (con instrucciones + existing_agents_md)
+    │
+    ▼
+server.py → _build_response()   ← respuesta neutra con total_chunks
+    │
+    │  MCP response: { status, total_chunks, agents_md_path, instructions }
+    ▼
+Cliente MCP
+    │
+    ├─ STEP 1: Llamar read_payload_chunk(chunk_index=0), luego 1, 2… hasta has_more=false
+    ├─ STEP 2: Concatenar todos los campos "data" → payload completo
+    ├─ STEP 3: Leer campo "instructions" del payload → reglas de escritura
+    ├─ STEP 4: Escribir AGENTS.md usando payload + reglas
+    └─ STEP 5: Informar al usuario
+         (payload.json se borra automáticamente al leer el último chunk)
+```
+
+---
+
+## Flujo 2 — scan_codebase (contexto puro)
 
 ```
 Cliente MCP
@@ -14,28 +56,26 @@ Cliente MCP
 server.py → scan_codebase()
     │
     ▼
-server.py → _run_pipeline()
+server.py → _run_pipeline(force_full_scan=True, include_agents_md_context=False)
     │
     ├─ 1. config.py          → load_config()
     ├─ 2. cache.py           → load_cache() + is_cache_valid()
     ├─ 3. change_detector.py → detect_changes()
     ├─ 4. ast_analyzer.py    → analyze_changes()
-    ├─ 5. context_builder.py → build_payload()
+    ├─ 5. context_builder.py → build_payload(include_agents_md_context=False)
+    │       └─ SIN instructions, SIN existing_agents_md
     ├─ 6. cache.py           → save_cache()
-    └─ 7. disco              → payload.json
+    └─ 7. disco              → payload.json (datos puros)
     │
     ▼
 server.py → _build_response()
     │
-    │  MCP response: JSON pequeño (~1k) con total_chunks e instrucciones
+    │  MCP response: { status, total_chunks, instructions }
     ▼
 Cliente MCP
     │
-    ├─ STEP 1: Llamar read_payload_chunk(chunk_index=0), luego 1, 2… hasta has_more=false
-    ├─ STEP 2: Concatenar todos los campos "data" y parsear como JSON
-    ├─ STEP 3: Escribir AGENTS.md usando solo esos datos
-    └─ STEP 4: Informar al usuario
-         (payload.json se borra automáticamente al leer el último chunk)
+    ├─ Llamar read_payload_chunk hasta has_more=false
+    └─ Usar el payload para cualquier propósito (code review, planning, Q&A)
 ```
 
 ---
@@ -56,7 +96,7 @@ El resultado es un `ProjectConfig` con:
 
 ### ¿Hay cache?
 
-Si `force_full_scan = True` → se ignora cualquier cache (cold start forzado).
+Si `force_full_scan = True` → se ignora cualquier cache (cold start forzado). `scan_codebase` default es `True`. `generate_agents_md` siempre usa `False` — si no hay cache, `change_detector` hace cold start igual.
 
 Si no → `load_cache(project_path)` intenta leer `~/.cache/agents-md-generator/<project-hash>/cache.json`.
 
@@ -108,51 +148,16 @@ El resultado es `{ path → FileAnalysis }` con todos los símbolos públicos + 
 
 ## Paso 5 — Construcción del payload
 
-`build_payload(...)` en `context_builder.py` orquesta los scanners y ensambla el JSON final.
+`build_payload(..., include_agents_md_context)` en `context_builder.py` orquesta los scanners y ensambla el JSON final.
 
-### Scanners del filesystem (independientes del AST)
+Cuando `include_agents_md_context=True` (solo desde `generate_agents_md`):
+- Lee el AGENTS.md existente del disco si lo hay → campo `existing_agents_md`
+- Genera las reglas de escritura via `_build_instructions(has_existing)` → campo `instructions`
+- Ambos campos se insertan en el payload: `instructions` después de `metadata`, `existing_agents_md` al final
 
-Cuatro módulos especializados hacen análisis estático del filesystem en paralelo conceptual:
-
-- **`project_scanner._scan_project_structure`**: lista directorios, cuenta archivos, detecta el lenguaje dominante por directorio. Detecta y marca directorios de boilerplate (e.g., `Migrations`, `bin`, `obj`) con `"kind": "boilerplate"`. También detecta config files (`.eslintrc`, `tsconfig.json`, etc.) y archivos de CI.
-- **`build_system._detect_build_systems`**: busca `package.json`, `pyproject.toml`, `go.mod`, `Makefile`, etc. Para cada uno extrae los scripts ejecutables.
-- **`project_scanner._detect_env_vars`**: escanea código fuente con regex por lenguaje y archivos `.env.example`.
-- **`project_scanner._detect_entry_points`**: busca archivos cuyo stem es `main`, `index`, `app`, `server`, etc., e infiere su rol.
-
-### Procesamiento por archivo
-
-Para cada `FileChange`:
-
-- **`"deleted"`**: se agrega al `changes_payload` con `impact="high"`
-- **`"new"`**: se formatea con sus símbolos públicos. Si el archivo es detectado como de "baja entropía" (e.g., DTOs/Entidades sin lógica), se devuelve un resumen minificado (`kind: "dto_container"`) en lugar de listar todos sus símbolos.
-- **`"modified"` con historial en cache**: se computa diff semántico, se clasifica cada cambio con `classify_impact`, se filtra por threshold. Si nada supera el threshold → el archivo se omite del payload
-- **`"modified"` sin historial**: se trata como `"new"`
-
-### Agregación de directorios
-
-Los archivos de producción pasan por `aggregator._aggregate_by_directory`. Todo directorio que supera el threshold de agregación se colapsa en algún tipo de `directory_summary` — nunca queda como entradas individuales sin acotar:
-
-- **Patrón de métodos comunes**: si ≥ 2 firmas de métodos aparecen en ≥ 60% de los archivos con cobertura ≥ 40%, se genera un summary con `common_methods`, `outliers` y `naming_pattern`.
-- **Directorio DTO**: si ≥ 80% de los archivos son clases sin métodos (o todos fueron minificados como `dto_container`), se genera un resumen semántico DTO.
-- **Fallback genérico**: directorios que no matchean ningún patrón se colapsan igualmente con `sample_files` y `naming_pattern` si existe. Esto evita que directorios grandes sin patrón detectable inflen el payload.
-
-### El payload final
-
-```json
-{
-  "metadata": {...},
-  "instructions": "...",
-  "project_structure": {...},
-  "build_system": {...},
-  "entry_points": [...],
-  "env_vars": [...],
-  "changes": [...],
-  "full_analysis": [...],
-  "existing_agents_md": "..."
-}
-```
-
-El campo `instructions` (generado por `instructions._build_instructions`) ahora se ubica al inicio del payload para establecer las reglas fundamentales antes de que el modelo procese el resto del contexto.
+Cuando `include_agents_md_context=False` (desde `scan_codebase`):
+- El payload no contiene `instructions` ni `existing_agents_md`
+- Datos puros sin mandato de AGENTS.md
 
 ---
 
@@ -172,17 +177,17 @@ Se construye una nueva cache desde cero:
 
 El payload JSON se escribe en `~/.cache/agents-md-generator/<project-hash>/payload.json`.
 
-Se calcula cuántas líneas tiene y cuántos chunks de 500 líneas eso representa. La respuesta que llega al cliente MCP es un JSON pequeño:
+La respuesta que llega al cliente MCP es un dict pequeño:
 
 ```json
 {
   "status": "ready",
-  "payload_lines": 847,
   "total_chunks": 2,
-  "agents_md_path": "/code/mi-proyecto/AGENTS.md",
-  "instructions": "STEP 1 — Retrieve the full payload by calling read_payload_chunk..."
+  "instructions": "Codebase analysis complete. Retrieve the full payload by calling read_payload_chunk..."
 }
 ```
+
+En el caso de `generate_agents_md`, se enriquece con `agents_md_path` e instrucciones específicas para escribir AGENTS.md.
 
 ---
 
@@ -205,22 +210,26 @@ Al leer el último chunk (`has_more: false`), el archivo `payload.json` se borra
 
 ## Por qué este diseño y no otro
 
+### ¿Por qué generate_agents_md llama scan internamente?
+
+La alternativa anterior instruía al agente a llamar `scan_codebase` como primer paso. Eso introduce no-determinismo: el agente puede equivocarse con los parámetros, saltear el paso, o llamarlo en el orden incorrecto. Al mover el scan al interior de `generate_agents_md`, el flujo de AGENTS.md es completamente determinístico — el agente recibe instrucciones para leer chunks y escribir el archivo, nada más.
+
+### ¿Por qué las instrucciones van en el payload y no en la respuesta del tool?
+
+Si las instrucciones de escritura estuvieran en la respuesta de `generate_agents_md`, el agente necesitaría combinar dos fuentes de datos: la respuesta del tool y el payload de los chunks. Al inyectarlas dentro del payload, el agente solo necesita leer los chunks y tiene todo en un único objeto JSON — menor superficie de error.
+
 ### ¿Por qué read_payload_chunk en vez de leer el archivo directamente?
 
-La alternativa anterior era instruir al cliente a leer `payload.json` con su tool `Read`. Eso requería que el cliente tuviera acceso al filesystem y conociera la ruta exacta del cache. Con `read_payload_chunk`, el flujo es 100% MCP — cualquier cliente compatible (Claude Code, Cursor, Gemini CLI, Windsurf) puede seguirlo sin necesidad de acceso al filesystem. El server gestiona completamente el ciclo de vida del archivo.
+La alternativa anterior era instruir al cliente a leer `payload.json` con su tool `Read`. Eso requería que el cliente tuviera acceso al filesystem y conociera la ruta exacta del cache. Con `read_payload_chunk`, el flujo es 100% MCP — cualquier cliente compatible puede seguirlo sin acceso al filesystem.
 
 ### ¿Por qué 500 líneas por chunk?
 
-Es un balance entre número de llamadas MCP y tamaño de cada respuesta. Chunks más grandes reducen las llamadas pero aumentan el riesgo de superar límites de respuesta. Chunks más chicos generan demasiado overhead de llamadas en proyectos grandes.
+Es un balance entre número de llamadas MCP y tamaño de cada respuesta. Chunks más grandes reducen las llamadas pero aumentan el riesgo de superar límites. Chunks más chicos generan overhead en proyectos grandes.
 
 ### ¿Por qué cache basada en SHA-256 y no en mtime?
 
-`mtime` (tiempo de modificación) es poco confiable: `git checkout`, copias de archivos, y algunas operaciones de build lo alteran sin cambiar el contenido. SHA-256 detecta cambios reales de contenido.
+`mtime` es poco confiable: `git checkout`, copias de archivos, y algunas operaciones de build lo alteran sin cambiar el contenido. SHA-256 detecta cambios reales de contenido.
 
 ### ¿Por qué el diff es semántico y no textual?
 
-Un `git diff` de un archivo refactorizado puede tener 200 líneas modificadas aunque la API pública no cambió. El diff semántico sobre los símbolos detecta exactamente lo que le importa a AGENTS.md: qué cambió en la superficie pública. El filtrado de impacto se deriva del `SizeProfile` — medium para proyectos small/medium, high para large.
-
-### ¿Por qué las instrucciones para el cliente van embebidas en el payload?
-
-Para garantizar consistencia. Si las instrucciones estuvieran hardcodeadas en el prompt del usuario o en el system prompt del cliente, podrían variar entre versiones, contextos, o configuraciones. Al estar en el payload que genera el server, el mismo código controla tanto el dato como cómo debe usarlo el modelo.
+Un `git diff` de un archivo refactorizado puede tener 200 líneas modificadas aunque la API pública no cambió. El diff semántico sobre los símbolos detecta exactamente lo que le importa a AGENTS.md: qué cambió en la superficie pública.

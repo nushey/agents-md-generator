@@ -34,17 +34,18 @@ build_payload()
     │   ├─ _deduplicate_methods()                   → registry de firmas repetidas
     │   └─ _strip_language_from_file_entries()       → elimina "language" redundante
     │
-    └─ instructions._build_instructions()           → prompt embebido
+    └─ instructions._build_instructions()           → prompt embebido (solo si include_agents_md_context=True)
 ```
 
 ## Estructura del payload resultante
 
+El payload varía según quién llama `build_payload`:
+
+**Con `include_agents_md_context=True`** (desde `generate_agents_md`):
+
 ```json
 {
-  "metadata": {
-    "project_name": "...",
-    "languages_detected": [...]
-  },
+  "metadata": { "project_name": "...", "languages_detected": [...] },
   "instructions": "...",
   "project_structure": { "directories": {...}, "config_files_found": [...], ... },
   "build_system": { "detected": [...], "scripts": {...} },
@@ -59,6 +60,25 @@ build_payload()
 }
 ```
 
+**Con `include_agents_md_context=False`** (desde `scan_codebase`, default):
+
+```json
+{
+  "metadata": { "project_name": "...", "languages_detected": [...] },
+  "project_structure": { ... },
+  "build_system": { ... },
+  "entry_points": [...],
+  "env_vars": [...],
+  "changes": [...],
+  "full_analysis": [...],
+  "method_patterns": { ... },
+  "wiring": { ... },
+  "interface_impl_map": { ... }
+}
+```
+
+Los campos `instructions` y `existing_agents_md` están ausentes — el payload es datos puros sin mandato de AGENTS.md.
+
 ## Procesamiento por archivo (lógica de negocio central)
 
 Para cada `FileChange` en la lista de cambios:
@@ -72,7 +92,7 @@ Para cada `FileChange` en la lista de cambios:
 
 | Función | Qué hace |
 |---|---|
-| `build_payload(project_path, config, changes, new_analyses, cache, scan_type)` | Función pública principal. Ensambla y retorna el payload completo como dict. Resuelve `config.profile` y lo pasa a todos los módulos downstream |
+| `build_payload(project_path, config, changes, new_analyses, cache, scan_type, include_agents_md_context)` | Función pública principal. Ensambla y retorna el payload como dict. Cuando `include_agents_md_context=True`, inyecta `instructions` y `existing_agents_md` |
 | `_deduplicate_methods(entries)` | Extrae firmas de métodos que aparecen ≥3 veces en un registry `method_patterns` con claves cortas (`m0`, `m1`, ...). Modifica las entradas in-place |
 | `_strip_language_from_file_entries(entries)` | Elimina el campo `language` de entradas individuales de archivo (no de directory summaries). Ya está en `metadata.languages_detected` |
 | `_build_interface_impl_map(analyses)` | Construye un mapa interface → implementors a nivel de proyecto |

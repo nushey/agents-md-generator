@@ -171,7 +171,7 @@ Open any project and ask your AI client:
 
 > "Generate the AGENTS.md for this project"
 
-The client should call `scan_codebase` automatically. If the tool does not appear:
+The client should call `generate_agents_md` automatically. If the tool does not appear:
 
 1. Verify the JSON is valid — no trailing commas, correct quotes
 2. Restart your client completely

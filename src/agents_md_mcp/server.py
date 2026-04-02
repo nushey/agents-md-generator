@@ -13,6 +13,7 @@ over the MCP wire, and no filesystem access is required from the client side.
 
 import json
 import logging
+import os
 import sys
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -37,9 +38,10 @@ from .connectors import setup_connectors, get_connector_spec
 from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
+_log_level = getattr(logging, os.environ.get("AGENTS_MD_LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
     stream=sys.stderr,
-    level=logging.INFO,
+    level=_log_level,
     format="[agents-md] %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -317,6 +319,28 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
         "has_more": has_more,
         "data": chunk_data,
     })
+
+
+@mcp.prompt(name="initialize-agents-md")
+def initialize_agents_md_prompt(project_path: str = ".") -> str:
+    """Guide the agent to perform an initial scan and create the first AGENTS.md file."""
+    return (
+        f"Use the scan_codebase tool with project_path='{project_path}' to analyze this project "
+        "and generate an AGENTS.md architectural context file. "
+        "Follow the instructions returned by the tool to read the payload chunks "
+        "and write the final AGENTS.md."
+    )
+
+
+@mcp.prompt(name="update-agents-md")
+def update_agents_md_prompt(project_path: str = ".") -> str:
+    """Guide the agent to perform an incremental update of an existing AGENTS.md file."""
+    return (
+        f"Use the scan_codebase tool with project_path='{project_path}' and force_full_scan=False "
+        "to detect changes since the last scan and update only the affected sections of AGENTS.md. "
+        "Follow the instructions returned by the tool to read the payload chunks "
+        "and rewrite only the sections where changes were detected."
+    )
 
 
 def _build_response(

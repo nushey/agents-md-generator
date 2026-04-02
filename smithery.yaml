@@ -1,0 +1,24 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      logLevel:
+        type: string
+        title: Log Level
+        description: "Logging verbosity for the server process. Useful for debugging scan issues."
+        default: INFO
+        enum:
+          - DEBUG
+          - INFO
+          - WARNING
+          - ERROR
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: "uvx",
+      args: ["agents-md-generator"],
+      env: {
+        AGENTS_MD_LOG_LEVEL: config.logLevel || "INFO",
+      }
+    })

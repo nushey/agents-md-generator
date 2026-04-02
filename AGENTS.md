@@ -40,7 +40,8 @@ Domain models and DTOs (Data Transfer Objects) are defined in `src/agents_md_mcp
 ## Backend Guidelines
 
 - **Language Analyzers**: To support a new language, create a class inheriting from `LanguageAnalyzer` in `src/agents_md_mcp/languages/`. You must implement `language_key()` and `analyze()`.
-- **MCP Tools**: Public tools (`scan_codebase`, `read_payload_chunk`) must reside in `server.py` and use the `@mcp.tool` decorator.
+- **MCP Tools**: Public tools (`scan_codebase`, `read_payload_chunk`, `generate_agents_md`) must reside in `server.py` and use the `@mcp.tool` decorator.
+- **MCP Prompts**: User-facing prompts (e.g. `initialize-agents-md`, `update-agents-md`) are defined in `server.py` using the `@mcp.prompt` decorator and return plain strings consumed by the client.
 - **Caching**: All persistent state is managed via `cache.py`. Modules should interact with `CacheData` objects to support incremental scans.
 - **Error Handling**: Follow the pattern in `server.py` where exceptions are caught at the tool level and returned as JSON error messages to the client.
 
@@ -63,12 +64,14 @@ Domain models and DTOs (Data Transfer Objects) are defined in `src/agents_md_mcp
 
 | Variable | Purpose |
 | :--- | :--- |
+| `AGENTS_MD_LOG_LEVEL` | Controls server log verbosity (e.g. `DEBUG`, `INFO`). Defaults to `INFO` if unset. |
 | `PYPI_TOKEN` | Authentication token used to publish the package to PyPI via `publish.sh`. |
 
 ## Setup & Build Commands
 
 ```bash
 uv sync
+uv run agents-md-generator
 ```
 
 The bootstrap entry point is `src/agents_md_mcp/server.py` via the `main()` function, which is registered as the `agents-md-generator` script.
@@ -89,6 +92,6 @@ This file is generated and maintained by the `agents-md-generator` MCP tool.
 
 > "Update the AGENTS.md for this project"
 
-The assistant will invoke the `scan_codebase` tool automatically, perform an
+The assistant will invoke the `generate_agents_md` tool automatically, perform an
 incremental scan of changed files, and rewrite only the affected sections.
 To force a full rescan from scratch: "Regenerate the AGENTS.md from scratch".

@@ -23,6 +23,7 @@ dependencies = [
     "tree-sitter-java>=0.23.0",
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-ruby>=0.23.0",
+    "rich>=13.0.0",
 ]
 
 [project.urls]

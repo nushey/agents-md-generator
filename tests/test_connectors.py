@@ -119,14 +119,9 @@ def test_setup_connectors_auto_detects_multiple_agents(tmp_path: Path) -> None:
 # ── _build_response (integration) ─────────────────────────────────────────────
 
 
-def test_build_response_calls_setup_connectors(tmp_path: Path) -> None:
-    response = _build_response(
-        payload_path=tmp_path / "payload.json",
-        num_chunks=2,
-        agents_md_path=tmp_path / "AGENTS.md",
-        project_path=tmp_path,
-        client_name="claude-code",
-    )
+def test_build_response_returns_neutral_response(tmp_path: Path) -> None:
+    response = _build_response(num_chunks=2, project_path=tmp_path)
 
     assert response["status"] == "ready"
-    assert (tmp_path / "CLAUDE.md").exists()
+    assert response["total_chunks"] == 2
+    assert "read_payload_chunk" in response["instructions"]

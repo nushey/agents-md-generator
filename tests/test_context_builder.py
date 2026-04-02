@@ -289,23 +289,11 @@ def test_build_payload_new_files(tmp_path: Path) -> None:
     assert payload["full_analysis"][0]["file"] == "src/app.py"
 
 
-def test_build_payload_includes_instructions(tmp_path: Path) -> None:
+def test_build_payload_does_not_include_agents_md_fields(tmp_path: Path) -> None:
     cfg = load_config(tmp_path)
     payload = build_payload(tmp_path, cfg, [], {}, cache=None)
-    assert "AGENTS.md" in payload["instructions"]
-
-
-def test_build_payload_reads_existing_agents_md(tmp_path: Path) -> None:
-    _write(tmp_path / "AGENTS.md", "# Existing content\n")
-    cfg = load_config(tmp_path)
-    payload = build_payload(tmp_path, cfg, [], {}, cache=None)
-    assert payload["existing_agents_md"] == "# Existing content\n"
-
-
-def test_build_payload_no_agents_md(tmp_path: Path) -> None:
-    cfg = load_config(tmp_path)
-    payload = build_payload(tmp_path, cfg, [], {}, cache=None)
-    assert payload["existing_agents_md"] is None
+    assert "instructions" not in payload
+    assert "existing_agents_md" not in payload
 
 
 def test_build_payload_modified_with_diff(tmp_path: Path) -> None:

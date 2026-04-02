@@ -21,5 +21,6 @@ def test_payload_instruction_order(tmp_path):
     # Check key order
     keys = list(payload.keys())
     assert keys[0] == "metadata"
-    assert keys[1] == "instructions"
-    assert "project_structure" in keys
+    assert keys[1] == "project_structure"
+    assert "instructions" not in keys
+    assert "existing_agents_md" not in keys

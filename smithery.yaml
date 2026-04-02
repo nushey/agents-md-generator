@@ -1,5 +1,5 @@
 startCommand:
-  type: stdio
+  type: http
   configSchema:
     type: object
     properties:
@@ -17,7 +17,7 @@ startCommand:
   commandFunction: |-
     (config) => ({
       command: "uvx",
-      args: ["agents-md-generator"],
+      args: ["agents-md-generator", "--transport", "streamable-http"],
       env: {
         AGENTS_MD_LOG_LEVEL: config.logLevel || "INFO",
       }

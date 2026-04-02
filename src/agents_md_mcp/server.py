@@ -425,7 +425,17 @@ def _build_response(num_chunks: int, project_path: Path) -> dict:
 
 
 def main() -> None:
-    mcp.run()
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--transport", default="stdio", choices=["stdio", "streamable-http"])
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="0.0.0.0")
+    args, _ = parser.parse_known_args()
+
+    if args.transport == "streamable-http":
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

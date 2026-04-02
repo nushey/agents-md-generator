@@ -123,6 +123,7 @@ def build_payload(
     new_analyses: dict[str, FileAnalysis],
     cache: CacheData | None,
     scan_type: str = "full",
+    include_agents_md_context: bool = False,
 ) -> dict:
     """
     Assemble the complete JSON payload to return from the MCP tool.
@@ -144,14 +145,14 @@ def build_payload(
     structure = _scan_project_structure(root, config)
     build_system = _detect_build_systems(root)
 
-    # Read existing AGENTS.md if present
-    agents_md_path = root / config.agents_md_path.lstrip("./")
-    existing_agents_md = None
-    if agents_md_path.exists():
-        try:
-            existing_agents_md = agents_md_path.read_text(encoding="utf-8")
-        except OSError:
-            pass
+    existing_agents_md: str | None = None
+    if include_agents_md_context:
+        agents_md_path = root / config.agents_md_path.lstrip("./")
+        if agents_md_path.exists():
+            try:
+                existing_agents_md = agents_md_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
 
     profile = config.profile
     threshold = profile.impact_filter
@@ -260,15 +261,17 @@ def build_payload(
             "project_name": project_name,
             "languages_detected": list({a.language for a in new_analyses.values()}),
         },
-        "instructions": _build_instructions(existing_agents_md is not None),
-        "project_structure": structure,
-        "build_system": build_system,
-        "entry_points": entry_points,
-        "env_vars": env_vars,
-        "changes": changes_payload,
-        "full_analysis": full_analysis_payload,
-        "existing_agents_md": existing_agents_md,
     }
+    if include_agents_md_context:
+        payload["instructions"] = _build_instructions(existing_agents_md is not None)
+    payload["project_structure"] = structure
+    payload["build_system"] = build_system
+    payload["entry_points"] = entry_points
+    payload["env_vars"] = env_vars
+    payload["changes"] = changes_payload
+    payload["full_analysis"] = full_analysis_payload
+    if include_agents_md_context:
+        payload["existing_agents_md"] = existing_agents_md
     if method_patterns:
         payload["method_patterns"] = method_patterns
     if wiring:

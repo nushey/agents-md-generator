@@ -1,14 +1,16 @@
 """agents-md-generator MCP Server.
 
-Exposes two tools:
+Exposes three tools:
 - scan_codebase: runs the full analysis pipeline and writes the payload to disk.
-- read_payload_chunk: streams the payload back in 500-line chunks until has_more is false.
+- read_payload_chunk: streams the payload back in chunks until has_more is false.
+- generate_agents_md: orchestrates the full AGENTS.md create/update workflow.
 
-Architecture: the server does all heavy analysis (tree-sitter, change detection,
-caching) and writes a temporary payload.json to the user cache directory. It returns
-a small response (~1k chars) with step-by-step instructions for the AI client to
-retrieve the payload via read_payload_chunk and write AGENTS.md. No large data travels
-over the MCP wire, and no filesystem access is required from the client side.
+Architecture: scan_codebase performs heavy analysis (tree-sitter, change detection,
+caching) and writes a temporary payload.json to disk. It returns a neutral response
+with instructions to retrieve the payload via read_payload_chunk — pure context data,
+no AGENTS.md mandate. generate_agents_md is the dedicated tool for AGENTS.md
+generation: it reads the existing file if present, returns writing rules and
+step-by-step orchestration instructions. No large data travels over the MCP wire.
 """
 
 import json
@@ -35,7 +37,7 @@ from .config import load_config
 from .context_builder import build_payload
 from .symbol_utils import _is_public, _is_test_file
 from .connectors import setup_connectors, get_connector_spec
-from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput
+from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput, GenerateAgentsMdInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
 _log_level = getattr(logging, os.environ.get("AGENTS_MD_LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -88,26 +90,26 @@ if _server is not None:
     },
 )
 async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
-    """Scan and analyze a codebase with tree-sitter, then write the payload to disk.
+    """Scan and analyze a codebase with tree-sitter, producing a structured context payload.
 
-    This tool performs all heavy analysis locally (AST parsing, change detection,
-    caching) and saves the structured payload to disk. It returns a small response
-    with step-by-step instructions for the AI client to read the payload via
-    read_payload_chunk and write AGENTS.md — no large data travels over the MCP wire.
+    Performs AST analysis, change detection, and caching. Writes the analysis payload
+    to disk and returns instructions to retrieve it via read_payload_chunk. The payload
+    contains pure architectural data — no AGENTS.md writing instructions.
 
-    Supported languages: Python, C#, TypeScript, JavaScript, Go.
+    Use this tool when you need deep codebase understanding for any task (code review,
+    refactoring, planning, Q&A). To generate or update AGENTS.md specifically, use
+    generate_agents_md instead — it orchestrates the full workflow automatically.
+
+    Supported languages: Python, C#, TypeScript, JavaScript, Go, Java, Rust, Ruby.
 
     Args:
         params (ScanCodebaseInput): Input parameters containing:
             - project_path (str): Path to the project root (default: ".")
-            - force_full_scan (bool): Ignore cache, rescan everything (default: False).
-              Set to True ONLY when the user explicitly asks to rescan from scratch.
-              When asked to improve, review, or update an existing AGENTS.md,
-              always use force_full_scan=False — the cache is valid and sufficient.
+            - force_full_scan (bool): Ignore cache and rescan everything (default: True).
+              Set to False only when called as part of an incremental update workflow.
 
     Returns:
-        str: Small JSON response with payload file path and exact instructions
-             for the AI client to follow. Never returns the full payload inline.
+        str: JSON with total_chunks and instructions to call read_payload_chunk.
     """
     project_path = Path(params.project_path).resolve()
 
@@ -117,21 +119,22 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     if not project_path.is_dir():
         return json.dumps({"error": f"Project path is not a directory: {project_path}"})
 
-    # Extract client name from MCP initialize handshake
-    client_name = _get_client_name(ctx)
-    logger.info("MCP client: %s (connector: %s)", client_name or "unknown", "yes" if get_connector_spec(client_name) else "no")
+    logger.info("scan_codebase: %s (force_full_scan=%s)", project_path, params.force_full_scan)
 
     try:
-        return await _run_pipeline(project_path, params.force_full_scan, client_name)
+        result = await _run_pipeline(project_path, params.force_full_scan)
+        return json.dumps(result, indent=2)
     except Exception as exc:
         logger.exception("Pipeline failed for %s", project_path)
         return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"})
 
 
 async def _run_pipeline(
-    project_path: Path, force_full_scan: bool, client_name: str | None = None
-) -> str:
-    """Execute the full analysis pipeline. Returns a small response JSON."""
+    project_path: Path,
+    force_full_scan: bool,
+    include_agents_md_context: bool = False,
+) -> dict:
+    """Execute the full analysis pipeline. Returns a response dict."""
 
     # 1. Load config
     config = load_config(project_path)
@@ -150,7 +153,7 @@ async def _run_pipeline(
     changes = detect_changes(project_path, config, cache)
 
     if not changes:
-        return json.dumps({
+        return {
             "status": "no_changes",
             "message": (
                 "No source file changes detected since the last scan. "
@@ -160,7 +163,7 @@ async def _run_pipeline(
                 "Then WAIT for the user to respond before doing anything else. "
                 "Do NOT call this tool again with force_full_scan=True unless the user explicitly requests a full rescan."
             ),
-        })
+        }
 
     logger.info("Detected %d changed files", len(changes))
 
@@ -176,6 +179,7 @@ async def _run_pipeline(
         new_analyses=new_analyses,
         cache=cache,
         scan_type=scan_type,
+        include_agents_md_context=include_agents_md_context,
     )
 
     # 6. Update and save cache
@@ -223,14 +227,9 @@ async def _run_pipeline(
     payload_size = len(payload_json.encode("utf-8"))
     logger.info("Payload written to %s (%d bytes)", payload_path, payload_size)
 
-    agents_md_path = (project_path / config.agents_md_path.lstrip("./")).resolve()
-
-    # 8. Return small response with instructions to call read_payload_chunk
+    # 8. Return response dict with instructions to call read_payload_chunk
     num_chunks = _compute_total_chunks(payload_json, compact)
-    return json.dumps(
-        _build_response(payload_path, num_chunks, agents_md_path, project_path, client_name),
-        indent=2,
-    )
+    return _build_response(num_chunks, project_path)
 
 
 @mcp.tool(
@@ -321,58 +320,106 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
     })
 
 
+@mcp.tool(
+    name="generate_agents_md",
+    annotations={
+        "title": "Generate AGENTS.md",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def generate_agents_md(params: GenerateAgentsMdInput, ctx: Context) -> str:
+    """Orchestrate the full AGENTS.md creation or update workflow.
+
+    Determines whether to create or update AGENTS.md by checking if the file already
+    exists. Returns writing rules, the existing content (if any), and step-by-step
+    instructions to scan the codebase and produce the final file.
+
+    Use this tool whenever the user asks to generate, create, update, or refresh
+    AGENTS.md. For general codebase context without AGENTS.md generation, use
+    scan_codebase + read_payload_chunk directly.
+
+    Args:
+        params (GenerateAgentsMdInput): Input parameters containing:
+            - project_path (str): Path to the project root (default: ".")
+
+    Returns:
+        str: JSON with agents_md_path, agents_md_rules, existing_agents_md (if any),
+             and step-by-step instructions for the agent to follow.
+    """
+    project_path = Path(params.project_path).resolve()
+
+    if not project_path.exists():
+        return json.dumps({"error": f"Project path does not exist: {project_path}"})
+
+    if not project_path.is_dir():
+        return json.dumps({"error": f"Project path is not a directory: {project_path}"})
+
+    config = load_config(project_path)
+    agents_md_path = (project_path / config.agents_md_path.lstrip("./")).resolve()
+
+    client_name = _get_client_name(ctx)
+    setup_connectors(project_path, agents_md_path, client_name)
+    logger.info("generate_agents_md: %s (client=%s)", project_path, client_name or "unknown")
+
+    try:
+        result = await _run_pipeline(
+            project_path,
+            force_full_scan=False,
+            include_agents_md_context=True,
+        )
+
+        if result.get("status") == "no_changes":
+            return json.dumps(result)
+
+        result["agents_md_path"] = str(agents_md_path)
+        result["instructions"] = (
+            f"Retrieve the analysis payload by calling read_payload_chunk with "
+            f"project_path='{project_path}' and chunk_index starting at 0. "
+            f"Keep calling until has_more is false. Accumulate all 'data' fields in order.\n\n"
+            f"The payload contains an 'instructions' field — read it FIRST, it has the exact "
+            f"rules and format for writing AGENTS.md.\n\n"
+            f"Write AGENTS.md to: {agents_md_path}\n\n"
+            f"Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
+            f"IMPORTANT: Do not read any source files. Do not call generate_agents_md or "
+            f"scan_codebase again. Complete all steps autonomously."
+        )
+        return json.dumps(result, indent=2)
+    except Exception as exc:
+        logger.exception("generate_agents_md failed for %s", project_path)
+        return json.dumps({"error": f"Failed: {type(exc).__name__}: {exc}"})
+
+
 @mcp.prompt(name="initialize-agents-md")
 def initialize_agents_md_prompt(project_path: str = ".") -> str:
-    """Guide the agent to perform an initial scan and create the first AGENTS.md file."""
+    """Guide the agent to create the first AGENTS.md file for a project."""
     return (
-        f"Use the scan_codebase tool with project_path='{project_path}' to analyze this project "
-        "and generate an AGENTS.md architectural context file. "
-        "Follow the instructions returned by the tool to read the payload chunks "
-        "and write the final AGENTS.md."
+        f"Call the generate_agents_md tool with project_path='{project_path}' "
+        "and follow its instructions exactly to create AGENTS.md."
     )
 
 
 @mcp.prompt(name="update-agents-md")
 def update_agents_md_prompt(project_path: str = ".") -> str:
-    """Guide the agent to perform an incremental update of an existing AGENTS.md file."""
+    """Guide the agent to update an existing AGENTS.md after code changes."""
     return (
-        f"Use the scan_codebase tool with project_path='{project_path}' and force_full_scan=False "
-        "to detect changes since the last scan and update only the affected sections of AGENTS.md. "
-        "Follow the instructions returned by the tool to read the payload chunks "
-        "and rewrite only the sections where changes were detected."
+        f"Call the generate_agents_md tool with project_path='{project_path}' "
+        "and follow its instructions exactly to update AGENTS.md."
     )
 
 
-def _build_response(
-    payload_path: Path,
-    num_chunks: int,
-    agents_md_path: Path,
-    project_path: Path,
-    client_name: str | None = None,
-) -> dict:
-    """Build the small response that instructs the agent to use read_payload_chunk."""
-
-    # Auto-modify connector files if possible
-    setup_connectors(project_path, agents_md_path, client_name)
-
+def _build_response(num_chunks: int, project_path: Path) -> dict:
+    """Build the neutral response that instructs the agent to use read_payload_chunk."""
     return {
         "status": "ready",
         "total_chunks": num_chunks,
-        "agents_md_path": str(agents_md_path),
         "instructions": (
-            f"The codebase analysis is complete. Follow these steps EXACTLY -- "
-            f"do NOT deviate, ask questions, or read any other files:\n\n"
-            f"STEP 1 -- Retrieve the full payload by calling the read_payload_chunk tool "
-            f"repeatedly with project_path='{project_path}' and chunk_index starting at 0. "
-            f"Each response contains a 'has_more' field. Keep calling with the next "
-            f"chunk_index until has_more is false. Accumulate all 'data' fields in order.\n\n"
-            f"STEP 2 -- The concatenated data is the full analysis payload. Read the "
-            f"'instructions' field FIRST -- it contains the exact format and rules for "
-            f"writing AGENTS.md. Then use the remaining fields as your data source.\n\n"
-            f"STEP 3 -- Write the generated AGENTS.md to: {agents_md_path}\n\n"
-            f"STEP 4 -- Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
-            f"IMPORTANT: Do not read any source files. Do not call scan_codebase again. "
-            f"Do not ask the user for anything. Complete all 4 steps autonomously."
+            f"Codebase analysis complete. Retrieve the full payload by calling "
+            f"read_payload_chunk with project_path='{project_path}' and chunk_index "
+            f"starting at 0. Keep calling until has_more is false. "
+            f"Accumulate all 'data' fields in order to reconstruct the analysis payload."
         ),
     }
 

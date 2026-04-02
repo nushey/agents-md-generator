@@ -107,11 +107,22 @@ class ScanCodebaseInput(BaseModel):
         description="Path to the project root. Default: current directory.",
     )
     force_full_scan: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Force a full scan ignoring any existing cache. "
-            "Use ONLY when the user explicitly asks to rescan or rebuild from scratch. "
-            "Do NOT set this to True when asked to improve, review, or update AGENTS.md — "
-            "the incremental scan already provides all the data needed."
+            "Force a full scan ignoring any existing cache. Defaults to True — "
+            "direct calls always perform a full scan for complete context. "
+            "Set to False only when called as part of an incremental update workflow "
+            "(e.g. orchestrated by generate_agents_md)."
         ),
+    )
+
+
+class GenerateAgentsMdInput(BaseModel):
+    """Input parameters for the generate_agents_md MCP tool."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_path: str = Field(
+        default=".",
+        description="Path to the project root. Default: current directory.",
     )

@@ -190,28 +190,31 @@ def build_payload(
             if old_symbols is not None:
                 diff = diff_analysis(old_symbols, [s for s in analysis.symbols if _is_public(s)])
 
+                # Classify each changed symbol once, then reuse for both the
+                # threshold filter and the overall-impact rollup below (was
+                # classified twice per symbol).
+                added = [(s, classify_impact(s, "added")) for s in diff.added]
+                removed = [(s, classify_impact(s, "removed")) for s in diff.removed]
+                modified = [(s, classify_impact(s, "modified")) for s in diff.modified]
+
                 filtered_added = [
-                    _slim_symbol(s) for s in diff.added
-                    if _passes_threshold(classify_impact(s, "added"), threshold)
+                    _slim_symbol(s) for s, impact in added
+                    if _passes_threshold(impact, threshold)
                 ]
                 filtered_removed = [
-                    _slim_symbol(s) for s in diff.removed
-                    if _passes_threshold(classify_impact(s, "removed"), threshold)
+                    _slim_symbol(s) for s, impact in removed
+                    if _passes_threshold(impact, threshold)
                 ]
                 filtered_modified = [
-                    _slim_symbol(s) for s in diff.modified
-                    if _passes_threshold(classify_impact(s, "modified"), threshold)
+                    _slim_symbol(s) for s, impact in modified
+                    if _passes_threshold(impact, threshold)
                 ]
 
                 if not (filtered_added or filtered_removed or filtered_modified):
                     continue  # Below threshold, skip
 
                 # Overall impact = highest of all changes
-                all_impacts = (
-                    [classify_impact(s, "added") for s in diff.added]
-                    + [classify_impact(s, "removed") for s in diff.removed]
-                    + [classify_impact(s, "modified") for s in diff.modified]
-                )
+                all_impacts = [impact for _, impact in (*added, *removed, *modified)]
                 overall = min(all_impacts, key=lambda x: _THRESHOLD_ORDER.get(x, 2)) if all_impacts else "low"
 
                 changes_payload.append({

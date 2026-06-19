@@ -50,13 +50,12 @@ logger = logging.getLogger(__name__)
 
 PAYLOAD_FILENAME = "payload.json"
 CHUNK_LINES = 500
-CHUNK_BYTES = 50_000  # ~50kb per chunk for compact (single-line) JSON
+CHUNK_CHARS = 50_000  # ~50k chars per chunk for compact (single-line) JSON
 
 def _compute_total_chunks(payload_text: str, compact: bool) -> int:
-    """Compute total chunks based on format: line-based for pretty, byte-based for compact."""
+    """Compute total chunks based on format: line-based for pretty, char-based for compact."""
     if compact:
-        size = len(payload_text.encode("utf-8"))
-        return (size + CHUNK_BYTES - 1) // CHUNK_BYTES
+        return (len(payload_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
     lines = payload_text.count("\n") + 1
     return (lines + CHUNK_LINES - 1) // CHUNK_LINES
 
@@ -218,10 +217,10 @@ async def _run_pipeline(
     # 7. Write payload to disk — never send it inline over MCP
     #    Use compact JSON (no indent) for large payloads to save ~30% size.
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
-    payload_json = json.dumps(payload, indent=2, default=str)
+    payload_json = json.dumps(payload, indent=2, default=str, ensure_ascii=False)
     compact = len(payload_json) > 300_000
     if compact:
-        payload_json = json.dumps(payload, default=str, separators=(",", ":"))
+        payload_json = json.dumps(payload, default=str, separators=(",", ":"), ensure_ascii=False)
         logger.info("Using compact JSON (payload > 300kb)")
     payload_path.write_text(payload_json, encoding="utf-8")
     payload_size = len(payload_json.encode("utf-8"))
@@ -272,23 +271,24 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
         })
 
     payload_text = payload_path.read_text(encoding="utf-8")
-    payload_bytes = payload_text.encode("utf-8")
 
-    # Detect compact mode: single-line JSON uses byte-based chunking
+    # Detect compact mode: single-line JSON uses char-based chunking.
+    # Slicing by character (not raw bytes) keeps multi-byte UTF-8 intact at
+    # chunk boundaries, so accented/non-ASCII content is never corrupted.
     compact = payload_text.count("\n") < 5
 
     if compact:
-        total_size = len(payload_bytes)
-        total_chunks = (total_size + CHUNK_BYTES - 1) // CHUNK_BYTES
+        total_size = len(payload_text)
+        total_chunks = (total_size + CHUNK_CHARS - 1) // CHUNK_CHARS
 
         if params.chunk_index < 0 or params.chunk_index >= total_chunks:
             return json.dumps({
                 "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
             })
 
-        start = params.chunk_index * CHUNK_BYTES
-        end = min(start + CHUNK_BYTES, total_size)
-        chunk_data = payload_bytes[start:end].decode("utf-8", errors="replace")
+        start = params.chunk_index * CHUNK_CHARS
+        end = min(start + CHUNK_CHARS, total_size)
+        chunk_data = payload_text[start:end]
     else:
         lines = payload_text.splitlines(keepends=True)
         total_lines = len(lines)
@@ -317,7 +317,7 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
         "total_chunks": total_chunks,
         "has_more": has_more,
         "data": chunk_data,
-    })
+    }, ensure_ascii=False)
 
 
 @mcp.tool(

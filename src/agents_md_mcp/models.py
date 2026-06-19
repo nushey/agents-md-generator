@@ -1,7 +1,28 @@
 """Pydantic models for agents-md-generator."""
 
+import re
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def normalize_signature(value: Optional[str]) -> Optional[str]:
+    """Flatten verbatim AST text into a single compact line.
+
+    Tree-sitter extracts signatures and decorators straight from source, so
+    multi-line definitions arrive carrying newlines and indentation. Once
+    serialized to JSON those turn into escaped ``\\n`` plus runs of whitespace
+    that bloat the payload and hurt readability for the agent. This collapses
+    every whitespace run to a single space and tidies the bracket spacing that
+    trailing commas in multi-line parameter lists leave behind.
+    """
+    if not value:
+        return value
+    flat = _WHITESPACE_RUN.sub(" ", value).strip()
+    flat = flat.replace("( ", "(").replace(" )", ")")
+    flat = flat.replace(", )", ")").replace(",)", ")")
+    return flat
 
 
 class FileChange(BaseModel):
@@ -32,6 +53,16 @@ class SymbolInfo(BaseModel):
     parent: Optional[str] = None
     line_start: int = 0
     line_end: int = 0
+
+    @field_validator("signature")
+    @classmethod
+    def _clean_signature(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_signature(v)
+
+    @field_validator("decorators", "implements")
+    @classmethod
+    def _clean_str_list(cls, v: list[str]) -> list[str]:
+        return [normalize_signature(item) or item for item in v]
 
 
 class FileAnalysis(BaseModel):
@@ -65,6 +96,16 @@ class CachedSymbol(BaseModel):
     visibility: Optional[str] = None
     signature: Optional[str] = None
     decorators: list[str] = Field(default_factory=list)
+
+    @field_validator("signature")
+    @classmethod
+    def _clean_signature(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_signature(v)
+
+    @field_validator("decorators")
+    @classmethod
+    def _clean_str_list(cls, v: list[str]) -> list[str]:
+        return [normalize_signature(item) or item for item in v]
 
 
 class CachedFile(BaseModel):

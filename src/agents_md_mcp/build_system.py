@@ -25,9 +25,13 @@ def _detect_build_systems(root: Path) -> dict:
     package_files = []
     detected_extras: dict = {}
 
+    # Discover .csproj files once — reused for both dotnet detection (the
+    # **/*.csproj marker) and parsing below, instead of walking the tree twice.
+    csproj_files = sorted(root.rglob("*.csproj"))
+
     for system, markers in _BUILD_MARKERS.items():
         for marker in markers:
-            matches = list(root.glob(marker))
+            matches = csproj_files if marker == "**/*.csproj" else list(root.glob(marker))
             if matches:
                 detected.append(system)
                 for m in matches:
@@ -174,7 +178,7 @@ def _detect_build_systems(root: Path) -> dict:
 
     dotnet_projects = []
     if "dotnet" in detected:
-        for csproj in sorted(root.rglob("*.csproj")):
+        for csproj in csproj_files:
             try:
                 tree = ET.parse(csproj)
                 xml_root = tree.getroot()

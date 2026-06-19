@@ -64,7 +64,13 @@ def _is_excluded(path: str, config: ProjectConfig) -> bool:
     """
     normalized = normalize_path(path)
     path_parts = normalized.split("/")
-    for pattern in config.exclude:
+    # Fast path: plain directory-name excludes (node_modules, dist, .git, …)
+    # resolved by O(1) set membership instead of an fnmatch loop. Equivalent to
+    # the inner-segment check below for these tokens, since "**/<dir>/**" only
+    # matches when <dir> is an exact path component.
+    if not config._exclude_dir_tokens.isdisjoint(path_parts):
+        return True
+    for pattern in config._exclude_globs:
         # 1. Direct fnmatch (works for **/*.min.js, **/dist/**, etc.)
         if fnmatch.fnmatch(normalized, pattern):
             return True

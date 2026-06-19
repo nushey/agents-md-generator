@@ -122,6 +122,18 @@ class ProjectConfig:
 
     def __init__(self, raw: dict[str, Any]) -> None:
         self.exclude: list[str] = raw.get("exclude", DEFAULT_CONFIG["exclude"])
+        # Pre-split exclude patterns once: plain "**/<dir>/**" tokens (no inner
+        # slash, no wildcards) become an O(1) set-membership check per file;
+        # everything else falls back to fnmatch. Computed here so the per-file
+        # hot path in _is_excluded never re-derives it.
+        self._exclude_dir_tokens: set[str] = set()
+        self._exclude_globs: list[str] = []
+        for _pat in self.exclude:
+            _token = _pat[3:-3] if _pat.startswith("**/") and _pat.endswith("/**") else None
+            if _token and "/" not in _token and not any(c in _token for c in "*?["):
+                self._exclude_dir_tokens.add(_token)
+            else:
+                self._exclude_globs.append(_pat)
         self.include: list[str] = raw.get("include", DEFAULT_CONFIG["include"])
         self.languages: str | list[str] = raw.get("languages", DEFAULT_CONFIG["languages"])
         self.project_size: str = raw.get("project_size", DEFAULT_CONFIG["project_size"])

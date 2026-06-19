@@ -11,7 +11,13 @@ from .cache import CacheData
 from .config import ProjectConfig
 from .instructions import _build_instructions
 from .models import FileAnalysis, FileChange
-from .project_scanner import _detect_entry_points, _detect_env_vars, _detect_wiring, _scan_project_structure
+from .project_scanner import (
+    _detect_entry_points,
+    _detect_env_vars,
+    _detect_wiring,
+    _scan_project_structure,
+    _walk_files,
+)
 from .symbol_utils import (
     _THRESHOLD_ORDER,
     _format_full,
@@ -142,7 +148,9 @@ def build_payload(
     root = Path(project_path).resolve()
     project_name = root.name
 
-    structure = _scan_project_structure(root, config)
+    # Single filesystem traversal shared by all structure scanners below.
+    walked_files = _walk_files(root, config)
+    structure = _scan_project_structure(root, config, walked_files)
     build_system = _detect_build_systems(root)
 
     existing_agents_md: str | None = None
@@ -251,8 +259,8 @@ def build_payload(
     method_patterns = _deduplicate_methods(full_analysis_payload)
     _strip_language_from_file_entries(full_analysis_payload)
 
-    env_vars = _detect_env_vars(root, config)
-    entry_points = _detect_entry_points(root, config)
+    env_vars = _detect_env_vars(root, config, walked_files)
+    entry_points = _detect_entry_points(root, config, walked_files)
     wiring = _detect_wiring(new_analyses, profile)
     interface_impl_map = _build_interface_impl_map(new_analyses)
 

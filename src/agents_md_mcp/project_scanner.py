@@ -60,17 +60,16 @@ _BOILERPLATE_DIR_NAMES = {
 }
 
 
-def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
-    """Scan directories and root files (no AST, pure filesystem)."""
+def _walk_files(root: Path, config: ProjectConfig) -> list[tuple[Path, str]]:
+    """Traverse the project tree exactly once, applying gitignore + exclude filters.
+
+    Shared by `_scan_project_structure`, `_detect_env_vars`, and
+    `_detect_entry_points` so a single `build_payload` walks the filesystem once
+    instead of three times, and loads the .gitignore spec once instead of
+    per-consumer. Returns (absolute_path, relative_posix_path) pairs.
+    """
     gitignore_spec = load_gitignore_spec(root)
-
-    root_files = [
-        f.name for f in root.iterdir()
-        if f.is_file() and not f.name.startswith(".")
-    ][:30]
-
-    max_dir_depth = config.profile.max_dir_depth
-    dir_summary: dict[str, dict] = {}
+    files: list[tuple[Path, str]] = []
     try:
         for item in root.rglob("*"):
             if not item.is_file():
@@ -80,20 +79,43 @@ def _scan_project_structure(root: Path, config: ProjectConfig) -> dict:
                 continue
             if _is_excluded(rel, config):
                 continue
-            parent_rel = rel_posix(item.parent, root)
-            if parent_rel == ".":
-                continue
-            # Cap depth: "a/b/c/d" → "a/b/c" when depth > max_dir_depth
-            parts = parent_rel.split("/")
-            capped = "/".join(parts[:max_dir_depth])
-            if capped not in dir_summary:
-                dir_summary[capped] = {"file_count": 0, "languages": set()}
-            dir_summary[capped]["file_count"] += 1
-            lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
-            if lang:
-                dir_summary[capped]["languages"].add(lang)
+            files.append((item, rel))
     except OSError:
         pass
+    return files
+
+
+def _scan_project_structure(
+    root: Path, config: ProjectConfig, files: list[tuple[Path, str]] | None = None,
+) -> dict:
+    """Scan directories and root files (no AST, pure filesystem).
+
+    *files* is the shared single-walk result from `_walk_files`. When omitted
+    (e.g. in isolated tests) the walk is performed internally.
+    """
+    if files is None:
+        files = _walk_files(root, config)
+
+    root_files = [
+        f.name for f in root.iterdir()
+        if f.is_file() and not f.name.startswith(".")
+    ][:30]
+
+    max_dir_depth = config.profile.max_dir_depth
+    dir_summary: dict[str, dict] = {}
+    for item, _rel in files:
+        parent_rel = rel_posix(item.parent, root)
+        if parent_rel == ".":
+            continue
+        # Cap depth: "a/b/c/d" → "a/b/c" when depth > max_dir_depth
+        parts = parent_rel.split("/")
+        capped = "/".join(parts[:max_dir_depth])
+        if capped not in dir_summary:
+            dir_summary[capped] = {"file_count": 0, "languages": set()}
+        dir_summary[capped]["file_count"] += 1
+        lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
+        if lang:
+            dir_summary[capped]["languages"].add(lang)
 
     dirs_out: dict[str, dict] = {}
     for d, info in dir_summary.items():
@@ -166,36 +188,31 @@ _ENV_DOTFILES = (".env.example", ".env.template", ".env.sample", ".env.test")
 _ENV_VAR_RE = re.compile(r'^([A-Z][A-Z0-9_]+)\s*=')
 
 
-def _detect_env_vars(root: Path, config: ProjectConfig) -> list[str]:
+def _detect_env_vars(
+    root: Path, config: ProjectConfig, files: list[tuple[Path, str]] | None = None,
+) -> list[str]:
     """Scan source files and .env examples for environment variable names."""
-    gitignore_spec = load_gitignore_spec(root)
+    if files is None:
+        files = _walk_files(root, config)
     found: set[str] = set()
 
     # Scan source files for process.env.X / os.environ / etc.
-    try:
-        for item in root.rglob("*"):
-            if not item.is_file():
-                continue
-            rel = rel_posix(item, root)
-            if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
-                continue
-            lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
-            pattern = _ENV_PATTERNS.get(lang) if lang else None
-            if pattern is None:
-                continue
-            if item.stat().st_size > config.max_file_size_bytes:
-                continue
-            try:
-                content = item.read_text(encoding="utf-8", errors="replace")
-                for match in pattern.finditer(content):
-                    # rust pattern has two groups; take whichever matched
-                    var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)
-                    if var:
-                        found.add(var)
-            except OSError:
-                continue
-    except OSError:
-        pass
+    for item, _rel in files:
+        lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
+        pattern = _ENV_PATTERNS.get(lang) if lang else None
+        if pattern is None:
+            continue
+        if item.stat().st_size > config.max_file_size_bytes:
+            continue
+        try:
+            content = item.read_text(encoding="utf-8", errors="replace")
+            for match in pattern.finditer(content):
+                # rust pattern has two groups; take whichever matched
+                var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)
+                if var:
+                    found.add(var)
+        except OSError:
+            continue
 
     # Scan .env example files at root — most reliable source of truth
     for name in _ENV_DOTFILES:
@@ -242,38 +259,33 @@ def _infer_entry_role(rel: str, stem: str) -> str:
     return "Module index"
 
 
-def _detect_entry_points(root: Path, config: ProjectConfig) -> list[dict]:
+def _detect_entry_points(
+    root: Path, config: ProjectConfig, files: list[tuple[Path, str]] | None = None,
+) -> list[dict]:
     """Detect bootstrap / entry-point files (index, main, app, server, …)."""
-    gitignore_spec = load_gitignore_spec(root)
+    if files is None:
+        files = _walk_files(root, config)
     entries = []
     seen_dirs: set[str] = set()
 
-    try:
-        for item in root.rglob("*"):
-            if not item.is_file():
-                continue
-            rel = rel_posix(item, root)
-            if is_gitignored(rel, gitignore_spec) or _is_excluded(rel, config):
-                continue
-            if not config.is_extension_supported(item.suffix.lower()):
-                continue
-            if _is_test_file(rel):
-                continue
-            stem = item.stem.lower()
-            if stem not in _ENTRY_STEMS:
-                continue
-            # One entry per directory — avoid index.js + index.ts duplicates
-            parent = rel_posix(item.parent, root)
-            dir_key = f"{parent}/{stem}"
-            if dir_key in seen_dirs:
-                continue
-            seen_dirs.add(dir_key)
-            entries.append({
-                "file": rel,
-                "role": _infer_entry_role(rel, stem),
-            })
-    except OSError:
-        pass
+    for item, rel in files:
+        if not config.is_extension_supported(item.suffix.lower()):
+            continue
+        if _is_test_file(rel):
+            continue
+        stem = item.stem.lower()
+        if stem not in _ENTRY_STEMS:
+            continue
+        # One entry per directory — avoid index.js + index.ts duplicates
+        parent = rel_posix(item.parent, root)
+        dir_key = f"{parent}/{stem}"
+        if dir_key in seen_dirs:
+            continue
+        seen_dirs.add(dir_key)
+        entries.append({
+            "file": rel,
+            "role": _infer_entry_role(rel, stem),
+        })
 
     return sorted(entries, key=lambda e: e["file"])
 

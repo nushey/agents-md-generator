@@ -383,10 +383,24 @@ def _detect_wiring(analyses: dict[str, FileAnalysis], profile: SizeProfile) -> d
     return result
 
 
+def _index_methods_by_parent(analysis: FileAnalysis) -> dict[str, list]:
+    """Group method symbols by their parent class name in a single pass.
+
+    Lets route detectors look up a class's methods in O(1) instead of
+    re-scanning every symbol per class (was O(classes × symbols)).
+    """
+    by_parent: dict[str, list] = {}
+    for s in analysis.symbols:
+        if s.kind == "method" and s.parent:
+            by_parent.setdefault(s.parent, []).append(s)
+    return by_parent
+
+
 def _detect_csharp_routes(
     path: str, analysis: FileAnalysis, route_map: list[dict],
 ) -> None:
     """Detect ASP.NET controller routes from [Route], [HttpGet], etc. decorators."""
+    methods_by_parent = _index_methods_by_parent(analysis)
     # Find controller classes
     for sym in analysis.symbols:
         if sym.kind != "class":
@@ -409,9 +423,7 @@ def _detect_csharp_routes(
 
         # Extract method-level routes
         routes: list[dict] = []
-        for method_sym in analysis.symbols:
-            if method_sym.parent != sym.name or method_sym.kind != "method":
-                continue
+        for method_sym in methods_by_parent.get(sym.name, ()):
             for dec in method_sym.decorators:
                 for cs_attr, http_method in _CS_HTTP_METHODS.items():
                     if dec == cs_attr or dec.startswith(f"{cs_attr}("):
@@ -432,6 +444,7 @@ def _detect_ts_routes(
     path: str, analysis: FileAnalysis, route_map: list[dict],
 ) -> None:
     """Detect NestJS-style @Controller/@Get/@Post routes."""
+    methods_by_parent = _index_methods_by_parent(analysis)
     for sym in analysis.symbols:
         if sym.kind != "class":
             continue
@@ -450,9 +463,7 @@ def _detect_ts_routes(
             continue
 
         routes: list[dict] = []
-        for method_sym in analysis.symbols:
-            if method_sym.parent != sym.name or method_sym.kind != "method":
-                continue
+        for method_sym in methods_by_parent.get(sym.name, ()):
             for dec in method_sym.decorators:
                 for ts_dec, http_method in _TS_HTTP_METHODS.items():
                     if dec == f"{ts_dec}()" or dec.startswith(f"{ts_dec}("):

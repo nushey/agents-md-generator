@@ -225,6 +225,13 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis, profile: SizeP
             "symbols_count": len(containers),
         }
 
+    # Index public child symbols by parent once, so each container does O(1)
+    # lookups instead of re-scanning the whole symbol list (was O(C × S)).
+    children_by_parent: dict[str, list] = {}
+    for s in analysis.symbols:
+        if s.parent is not None and _is_public(s):
+            children_by_parent.setdefault(s.parent, []).append(s)
+
     symbols_out = []
     for sym in analysis.symbols:
         if not _is_public(sym):
@@ -235,6 +242,7 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis, profile: SizeP
                 "kind": sym.kind,
                 "signature": sym.signature,
             }
+            children = children_by_parent.get(sym.name, ())
 
             # Implements — interface→impl relationships
             if sym.implements:
@@ -242,8 +250,7 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis, profile: SizeP
 
             # Constructor deps — first-class, parsed as type list
             constructor = next(
-                (s for s in analysis.symbols
-                 if s.parent == sym.name and s.kind == "constructor" and _is_public(s)),
+                (s for s in children if s.kind == "constructor"),
                 None,
             )
             if constructor and constructor.signature:
@@ -254,8 +261,8 @@ def _format_full(path: str, _status: str, analysis: FileAnalysis, profile: SizeP
             # Methods — full signatures, capped
             all_methods = [
                 s.signature or s.name
-                for s in analysis.symbols
-                if s.parent == sym.name and s.kind == "method" and _is_public(s)
+                for s in children
+                if s.kind == "method"
             ]
             entry["methods"] = all_methods[:profile.max_methods_per_symbol]
             if len(all_methods) > profile.max_methods_per_symbol:

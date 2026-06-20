@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from agents_md_mcp.models import ReadPayloadChunkInput
-from agents_md_mcp.server import CHUNK_LINES, read_payload_chunk
+from agents_md_mcp.server import CHUNK_CHARS, read_payload_chunk
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,8 +56,7 @@ async def test_read_payload_chunk_single_chunk(tmp_path: Path) -> None:
 
 
 async def test_read_payload_chunk_multi_chunk_reads_all(tmp_path: Path) -> None:
-    lines = [f"line {i}\n" for i in range(CHUNK_LINES + 10)]
-    content = "".join(lines)
+    content = "x" * (CHUNK_CHARS + 10)
     _write_payload(tmp_path, content)
 
     accumulated = ""
@@ -75,8 +74,7 @@ async def test_read_payload_chunk_multi_chunk_reads_all(tmp_path: Path) -> None:
 
 
 async def test_read_payload_chunk_last_chunk_deletes_file(tmp_path: Path) -> None:
-    lines = [f"line {i}\n" for i in range(CHUNK_LINES + 1)]
-    payload_path = _write_payload(tmp_path, "".join(lines))
+    payload_path = _write_payload(tmp_path, "x" * (CHUNK_CHARS + 1))
 
     with patch("agents_md_mcp.server.get_project_cache_dir", return_value=tmp_path):
         # Read first chunk — file must still exist
@@ -89,13 +87,40 @@ async def test_read_payload_chunk_last_chunk_deletes_file(tmp_path: Path) -> Non
 
 
 async def test_read_payload_chunk_intermediate_has_more_true(tmp_path: Path) -> None:
-    lines = [f"line {i}\n" for i in range(CHUNK_LINES * 3)]
-    _write_payload(tmp_path, "".join(lines))
+    _write_payload(tmp_path, "x" * (CHUNK_CHARS * 3))
 
     with patch("agents_md_mcp.server.get_project_cache_dir", return_value=tmp_path):
         result = json.loads(await read_payload_chunk(_params(str(tmp_path), 0)))
     assert result["has_more"] is True
     assert result["total_chunks"] == 3
+
+
+async def test_read_payload_chunk_data_never_split_multibyte(tmp_path: Path) -> None:
+    # Accented chars straddling a chunk boundary must survive reassembly intact.
+    content = "ó" * (CHUNK_CHARS + 50)
+    _write_payload(tmp_path, content)
+
+    accumulated = ""
+    with patch("agents_md_mcp.server.get_project_cache_dir", return_value=tmp_path):
+        idx = 0
+        while True:
+            result = json.loads(await read_payload_chunk(_params(str(tmp_path), idx)))
+            accumulated += result["data"]
+            if not result["has_more"]:
+                break
+            idx += 1
+    assert accumulated == content
+
+
+async def test_read_payload_chunk_response_bounded(tmp_path: Path) -> None:
+    # Regression for the 62k-char chunk bug: even worst-case quote-dense content
+    # (every char escaped) must keep the serialized response within a safe bound.
+    _write_payload(tmp_path, '"' * (CHUNK_CHARS * 2))
+
+    with patch("agents_md_mcp.server.get_project_cache_dir", return_value=tmp_path):
+        raw = await read_payload_chunk(_params(str(tmp_path), 0))
+    # 20k source chars, each escaped to \" (2x), plus a small wrapper.
+    assert len(raw) < 45_000
 
 
 # ── Out-of-range chunk_index ───────────────────────────────────────────────────

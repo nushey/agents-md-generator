@@ -49,15 +49,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PAYLOAD_FILENAME = "payload.json"
-CHUNK_LINES = 500
-CHUNK_CHARS = 50_000  # ~50k chars per chunk for compact (single-line) JSON
+# Each chunk's 'data' is JSON-escaped into the tool response, which inflates it
+# (~1.2-1.5x for dense JSON-of-JSON). 20k source chars keeps the final escaped
+# response comfortably under MCP client tool-result token limits.
+CHUNK_CHARS = 20_000
 
-def _compute_total_chunks(payload_text: str, compact: bool) -> int:
-    """Compute total chunks based on format: line-based for pretty, char-based for compact."""
-    if compact:
-        return (len(payload_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
-    lines = payload_text.count("\n") + 1
-    return (lines + CHUNK_LINES - 1) // CHUNK_LINES
+
+def _compute_total_chunks(payload_text: str) -> int:
+    """Number of character-based chunks needed to stream the payload."""
+    return max(1, (len(payload_text) + CHUNK_CHARS - 1) // CHUNK_CHARS)
 
 
 def _get_client_name(ctx: Context) -> str | None:
@@ -113,19 +113,19 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     project_path = Path(params.project_path).resolve()
 
     if not project_path.exists():
-        return json.dumps({"error": f"Project path does not exist: {project_path}"})
+        return json.dumps({"error": f"Project path does not exist: {project_path}"}, ensure_ascii=False)
 
     if not project_path.is_dir():
-        return json.dumps({"error": f"Project path is not a directory: {project_path}"})
+        return json.dumps({"error": f"Project path is not a directory: {project_path}"}, ensure_ascii=False)
 
     logger.info("scan_codebase: %s (force_full_scan=%s)", project_path, params.force_full_scan)
 
     try:
         result = await _run_pipeline(project_path, params.force_full_scan)
-        return json.dumps(result, indent=2)
+        return json.dumps(result, indent=2, ensure_ascii=False)
     except Exception as exc:
         logger.exception("Pipeline failed for %s", project_path)
-        return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"})
+        return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
 
 async def _run_pipeline(
@@ -214,20 +214,18 @@ async def _run_pipeline(
     save_cache(project_path, new_cache)
     logger.info("Cache saved with %d entries", len(new_cache.files))
 
-    # 7. Write payload to disk — never send it inline over MCP
-    #    Use compact JSON (no indent) for large payloads to save ~30% size.
+    # 7. Write payload to disk — never send it inline over MCP.
+    #    Always compact, single-line JSON: the agent reassembles and parses it,
+    #    so pretty-printing adds no value and would only complicate chunk math.
+    #    ensure_ascii=False keeps accented identifiers readable instead of \uXXXX.
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
-    payload_json = json.dumps(payload, indent=2, default=str, ensure_ascii=False)
-    compact = len(payload_json) > 300_000
-    if compact:
-        payload_json = json.dumps(payload, default=str, separators=(",", ":"), ensure_ascii=False)
-        logger.info("Using compact JSON (payload > 300kb)")
+    payload_json = json.dumps(payload, default=str, separators=(",", ":"), ensure_ascii=False)
     payload_path.write_text(payload_json, encoding="utf-8")
     payload_size = len(payload_json.encode("utf-8"))
     logger.info("Payload written to %s (%d bytes)", payload_path, payload_size)
 
     # 8. Return response dict with instructions to call read_payload_chunk
-    num_chunks = _compute_total_chunks(payload_json, compact)
+    num_chunks = _compute_total_chunks(payload_json)
     return _build_response(num_chunks, project_path)
 
 
@@ -268,40 +266,25 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
                 "Payload file not found. "
                 "Call scan_codebase first to produce the analysis payload."
             )
-        })
+        }, ensure_ascii=False)
 
     payload_text = payload_path.read_text(encoding="utf-8")
 
-    # Detect compact mode: single-line JSON uses char-based chunking.
-    # Slicing by character (not raw bytes) keeps multi-byte UTF-8 intact at
-    # chunk boundaries, so accented/non-ASCII content is never corrupted.
-    compact = payload_text.count("\n") < 5
+    # Character-based chunking. Python slices strings by code point, so multi-byte
+    # UTF-8 (accented identifiers, etc.) is never split mid-character. The agent
+    # reconstructs the payload by concatenating each chunk's 'data' in order, so
+    # boundaries that fall inside JSON escape sequences rejoin losslessly.
+    total_size = len(payload_text)
+    total_chunks = max(1, (total_size + CHUNK_CHARS - 1) // CHUNK_CHARS)
 
-    if compact:
-        total_size = len(payload_text)
-        total_chunks = (total_size + CHUNK_CHARS - 1) // CHUNK_CHARS
+    if params.chunk_index < 0 or params.chunk_index >= total_chunks:
+        return json.dumps({
+            "error": f"chunk_index {params.chunk_index} is out of range (0-{total_chunks - 1})."
+        }, ensure_ascii=False)
 
-        if params.chunk_index < 0 or params.chunk_index >= total_chunks:
-            return json.dumps({
-                "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
-            })
-
-        start = params.chunk_index * CHUNK_CHARS
-        end = min(start + CHUNK_CHARS, total_size)
-        chunk_data = payload_text[start:end]
-    else:
-        lines = payload_text.splitlines(keepends=True)
-        total_lines = len(lines)
-        total_chunks = (total_lines + CHUNK_LINES - 1) // CHUNK_LINES
-
-        if params.chunk_index < 0 or params.chunk_index >= total_chunks:
-            return json.dumps({
-                "error": f"chunk_index {params.chunk_index} is out of range (0–{total_chunks - 1})."
-            })
-
-        start = params.chunk_index * CHUNK_LINES
-        end = min(start + CHUNK_LINES, total_lines)
-        chunk_data = "".join(lines[start:end])
+    start = params.chunk_index * CHUNK_CHARS
+    end = min(start + CHUNK_CHARS, total_size)
+    chunk_data = payload_text[start:end]
 
     has_more = params.chunk_index < total_chunks - 1
 
@@ -352,10 +335,10 @@ async def generate_agents_md(params: GenerateAgentsMdInput, ctx: Context) -> str
     project_path = Path(params.project_path).resolve()
 
     if not project_path.exists():
-        return json.dumps({"error": f"Project path does not exist: {project_path}"})
+        return json.dumps({"error": f"Project path does not exist: {project_path}"}, ensure_ascii=False)
 
     if not project_path.is_dir():
-        return json.dumps({"error": f"Project path is not a directory: {project_path}"})
+        return json.dumps({"error": f"Project path is not a directory: {project_path}"}, ensure_ascii=False)
 
     config = load_config(project_path)
     agents_md_path = (project_path / config.agents_md_path.lstrip("./")).resolve()
@@ -372,24 +355,24 @@ async def generate_agents_md(params: GenerateAgentsMdInput, ctx: Context) -> str
         )
 
         if result.get("status") == "no_changes":
-            return json.dumps(result)
+            return json.dumps(result, ensure_ascii=False)
 
         result["agents_md_path"] = str(agents_md_path)
         result["instructions"] = (
             f"Retrieve the analysis payload by calling read_payload_chunk with "
             f"project_path='{project_path}' and chunk_index starting at 0. "
             f"Keep calling until has_more is false. Accumulate all 'data' fields in order.\n\n"
-            f"The payload contains an 'instructions' field — read it FIRST, it has the exact "
+            f"The payload contains an 'instructions' field - read it FIRST, it has the exact "
             f"rules and format for writing AGENTS.md.\n\n"
             f"Write AGENTS.md to: {agents_md_path}\n\n"
             f"Tell the user: 'AGENTS.md has been generated at {agents_md_path}'\n\n"
             f"IMPORTANT: Do not read any source files. Do not call generate_agents_md or "
             f"scan_codebase again. Complete all steps autonomously."
         )
-        return json.dumps(result, indent=2)
+        return json.dumps(result, indent=2, ensure_ascii=False)
     except Exception as exc:
         logger.exception("generate_agents_md failed for %s", project_path)
-        return json.dumps({"error": f"Failed: {type(exc).__name__}: {exc}"})
+        return json.dumps({"error": f"Failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
 
 @mcp.prompt(name="initialize-agents-md")

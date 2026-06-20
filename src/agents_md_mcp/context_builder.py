@@ -275,18 +275,23 @@ def build_payload(
     }
     if include_agents_md_context:
         payload["instructions"] = _build_instructions(existing_agents_md is not None)
+        # Mode + existing content up front: the agent must know create vs update
+        # and have the file to preserve BEFORE it reads any full_analysis chunk.
+        payload["mode"] = "update" if existing_agents_md is not None else "create"
+        payload["existing_agents_md"] = existing_agents_md
+
+    # Interpretation tables BEFORE full_analysis so the agent can resolve method
+    # aliases (m0, m1, …) and interface→impl links while reading it, not after.
+    # Always emitted (possibly empty) for a stable, predictable schema.
+    payload["method_patterns"] = method_patterns
+    payload["interface_impl_map"] = interface_impl_map
+    payload["wiring"] = wiring
+
     payload["project_structure"] = structure
     payload["build_system"] = build_system
     payload["entry_points"] = entry_points
     payload["env_vars"] = env_vars
     payload["changes"] = changes_payload
+    # Bulkiest section last — it spans most chunks.
     payload["full_analysis"] = full_analysis_payload
-    if include_agents_md_context:
-        payload["existing_agents_md"] = existing_agents_md
-    if method_patterns:
-        payload["method_patterns"] = method_patterns
-    if wiring:
-        payload["wiring"] = wiring
-    if interface_impl_map:
-        payload["interface_impl_map"] = interface_impl_map
     return payload

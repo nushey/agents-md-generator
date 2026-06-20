@@ -65,11 +65,16 @@ READING AGGREGATED ENTRIES in `full_analysis`
   - `kind: "test_directory_summary"` --collapsed test dir with file/function counts
 
 METHOD PATTERN LOOKUP
-If `method_patterns` exists in the payload, short keys like "m0" in method
-lists resolve to full signatures via this lookup table.
+`method_patterns` (when non-empty) maps short keys like "m0" in method lists to
+their full signatures. It is delivered BEFORE `full_analysis`, so resolve each
+alias as you read -- never defer the lookup to the end.
 
 CONDITIONAL SECTIONS
-Include an output section ONLY if the payload has data for it.
+Include an output section ONLY if the payload has real data for it. A field that
+is absent, null, an empty list [], or an empty object {{}} means NO data was
+detected -- skip that section entirely and never speculate to fill it. This
+applies to wiring/route_map, env_vars, config_files_found, ci_files_found,
+test_directories, build_system.scripts, method_patterns, interface_impl_map.
 If no frontend files ->omit Frontend Guidelines. If env_vars is empty ->omit
 Environment Variables. Never generate empty or speculative sections.
 

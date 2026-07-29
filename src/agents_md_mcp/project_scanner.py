@@ -1,5 +1,6 @@
 """Filesystem scanners: project structure, env vars, and entry points."""
 
+import os
 import re
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from .change_detector import _is_excluded
 from .config import EXTENSION_TO_LANGUAGE, ProjectConfig, SizeProfile
 from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileAnalysis
-from .path_utils import rel_posix
+from .path_utils import prune_dirnames, rel_posix
 from .symbol_utils import _is_test_file
 
 # ── Project structure ─────────────────────────────────────────────────────────
@@ -67,21 +68,31 @@ def _walk_files(root: Path, config: ProjectConfig) -> list[tuple[Path, str]]:
     `_detect_entry_points` so a single `build_payload` walks the filesystem once
     instead of three times, and loads the .gitignore spec once instead of
     per-consumer. Returns (absolute_path, relative_posix_path) pairs.
+
+    Excluded directories (node_modules, bin/obj, .venv, …) are pruned before
+    descent, so their contents are never enumerated. Gitignore filtering stays
+    per-file: negation patterns can re-include files under an ignored directory.
+
+    Traversal order is canonical (lexicographic, top-down) — deterministic
+    across platforms, unlike the OS-dependent rglob order it replaced.
     """
-    gitignore_spec = load_gitignore_spec(root)
+    gitignore_spec = load_gitignore_spec(root, config)
     files: list[tuple[Path, str]] = []
-    try:
-        for item in root.rglob("*"):
-            if not item.is_file():
-                continue
-            rel = rel_posix(item, root)
-            if is_gitignored(rel, gitignore_spec):
-                continue
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = rel_posix(Path(dirpath), root)
+        dirnames.sort()
+        filenames.sort()
+        prune_dirnames(dirnames, rel_dir, config._exclude_dir_tokens, config._exclude_globs)
+        for name in filenames:
+            rel = f"{rel_dir}/{name}" if rel_dir != "." else name
             if _is_excluded(rel, config):
                 continue
+            if is_gitignored(rel, gitignore_spec):
+                continue
+            item = Path(dirpath) / name
+            if not item.is_file():
+                continue
             files.append((item, rel))
-    except OSError:
-        pass
     return files
 
 
@@ -187,6 +198,18 @@ _ENV_PATTERNS: dict[str, re.Pattern] = {
 _ENV_DOTFILES = (".env.example", ".env.template", ".env.sample", ".env.test")
 _ENV_VAR_RE = re.compile(r'^([A-Z][A-Z0-9_]+)\s*=')
 
+# Literal anchors per language: the regex can only match if one of these
+# substrings appears, so files without them skip the regex entirely. Rust needs
+# "var(" as well — its `var\s*\(` branch contains no "env" literal.
+_ENV_GUARDS: dict[str, tuple[str, ...]] = {
+    "javascript": ("env",),
+    "typescript": ("env",),
+    "python":     ("environ", "getenv"),
+    "go":         ("Getenv",),
+    "ruby":       ("ENV",),
+    "rust":       ("env", "var"),
+}
+
 
 def _detect_env_vars(
     root: Path, config: ProjectConfig, files: list[tuple[Path, str]] | None = None,
@@ -206,6 +229,9 @@ def _detect_env_vars(
             continue
         try:
             content = item.read_text(encoding="utf-8", errors="replace")
+            guards = _ENV_GUARDS.get(lang)
+            if guards and not any(g in content for g in guards):
+                continue
             for match in pattern.finditer(content):
                 # rust pattern has two groups; take whichever matched
                 var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)

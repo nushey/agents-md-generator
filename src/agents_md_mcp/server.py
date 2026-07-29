@@ -54,6 +54,36 @@ PAYLOAD_FILENAME = "payload.json"
 # response comfortably under MCP client tool-result token limits.
 CHUNK_CHARS = 20_000
 
+# The server is long-lived: cache the payload text per path so sequential
+# read_payload_chunk calls slice one in-memory string instead of re-reading the
+# whole file from disk on every chunk. Identity is (st_mtime_ns, st_size) —
+# nanosecond mtime plus size guards against same-second rewrites on
+# coarse-timestamp filesystems. _run_pipeline additionally invalidates the
+# entry explicitly whenever it rewrites the payload, so a stale hit would need
+# an out-of-process rewrite that preserves both mtime_ns and size.
+# Bounded FIFO (payloads can be multi-MB and an abandoned chunk sequence would
+# otherwise pin its text for the life of the process).
+_PAYLOAD_CACHE_MAX_ENTRIES = 4
+_payload_cache: dict[Path, tuple[tuple[int, int], str]] = {}
+
+
+def _payload_cache_put(payload_path: Path, key: tuple[int, int], text: str) -> None:
+    _payload_cache.pop(payload_path, None)
+    while len(_payload_cache) >= _PAYLOAD_CACHE_MAX_ENTRIES:
+        _payload_cache.pop(next(iter(_payload_cache)))
+    _payload_cache[payload_path] = (key, text)
+
+
+def _read_payload_cached(payload_path: Path) -> str:
+    stat = payload_path.stat()
+    key = (stat.st_mtime_ns, stat.st_size)
+    cached = _payload_cache.get(payload_path)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    text = payload_path.read_text(encoding="utf-8")
+    _payload_cache_put(payload_path, key, text)
+    return text
+
 
 def _compute_total_chunks(payload_text: str) -> int:
     """Number of character-based chunks needed to stream the payload."""
@@ -221,6 +251,9 @@ async def _run_pipeline(
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
     payload_json = json.dumps(payload, default=str, separators=(",", ":"), ensure_ascii=False)
     payload_path.write_text(payload_json, encoding="utf-8")
+    # Invalidate any cached text for this path — the identity key alone cannot
+    # rule out a rewrite that lands on the same (mtime_ns, size).
+    _payload_cache.pop(payload_path, None)
     payload_size = len(payload_json.encode("utf-8"))
     logger.info("Payload written to %s (%d bytes)", payload_path, payload_size)
 
@@ -268,7 +301,15 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
             )
         }, ensure_ascii=False)
 
-    payload_text = payload_path.read_text(encoding="utf-8")
+    try:
+        payload_text = _read_payload_cached(payload_path)
+    except OSError:
+        return json.dumps({
+            "error": (
+                "Payload file not found. "
+                "Call scan_codebase first to produce the analysis payload."
+            )
+        }, ensure_ascii=False)
 
     # Character-based chunking. Python slices strings by code point, so multi-byte
     # UTF-8 (accented identifiers, etc.) is never split mid-character. The agent
@@ -289,6 +330,7 @@ async def read_payload_chunk(params: ReadPayloadChunkInput) -> str:
     has_more = params.chunk_index < total_chunks - 1
 
     if not has_more:
+        _payload_cache.pop(payload_path, None)
         try:
             payload_path.unlink()
             logger.info("Payload file deleted after last chunk: %s", payload_path)

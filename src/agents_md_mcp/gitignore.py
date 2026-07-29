@@ -1,20 +1,53 @@
 """Gitignore support: load and apply .gitignore patterns via pathspec."""
 
-import logging
-from pathlib import Path
+from __future__ import annotations
 
-from .path_utils import normalize_path
+import logging
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .path_utils import prune_dirnames, rel_posix
 
 import pathspec
+
+if TYPE_CHECKING:
+    from .config import ProjectConfig
 
 logger = logging.getLogger(__name__)
 
 GITIGNORE_FILE = ".gitignore"
 
 
-def load_gitignore_spec(project_path: str | Path) -> pathspec.PathSpec | None:
+def _find_gitignores(root: Path, config: ProjectConfig | None) -> list[Path]:
+    """Locate .gitignore files, pruning only directories the active config excludes.
+
+    Pruning must follow the ACTIVE exclude list, not the defaults: a user who
+    re-enables a normally excluded directory (e.g. `exclude: []`) expects its
+    nested .gitignore files to be honored again. When *config* is None, no
+    pruning happens — identical discovery to the original full walk.
+    """
+    tokens = config._exclude_dir_tokens if config is not None else set()
+    globs = config._exclude_globs if config is not None else []
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        prune_dirnames(dirnames, rel_posix(Path(dirpath), root), tokens, globs)
+        if GITIGNORE_FILE in filenames:
+            found.append(Path(dirpath) / GITIGNORE_FILE)
+    return found
+
+
+def load_gitignore_spec(
+    project_path: str | Path, config: ProjectConfig | None = None,
+) -> pathspec.PathSpec | None:
     """
     Parse all .gitignore files from project root and nested directories.
+
+    When *config* is given, discovery skips directories its exclude list prunes
+    — their files never reach the per-file filters, so their .gitignore
+    patterns are irrelevant (and third-party ignore rules inside dependency
+    trees must not filter project files anyway).
 
     Returns a PathSpec that matches any gitignored path, or None if no
     .gitignore files are found.
@@ -22,14 +55,8 @@ def load_gitignore_spec(project_path: str | Path) -> pathspec.PathSpec | None:
     root = Path(project_path)
     all_patterns: list[str] = []
 
-    # Walk all .gitignore files in the project
-    for gitignore in root.rglob(GITIGNORE_FILE):
-        # Skip .gitignore files inside .git/ or other hidden dirs
-        try:
-            gitignore.relative_to(root)
-        except ValueError:
-            continue
-        rel_dir = normalize_path(str(gitignore.parent.relative_to(root)))
+    for gitignore in _find_gitignores(root, config):
+        rel_dir = rel_posix(gitignore.parent, root)
 
         try:
             lines = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()

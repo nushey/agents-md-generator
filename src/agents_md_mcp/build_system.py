@@ -20,14 +20,19 @@ _BUILD_MARKERS: dict[str, list[str]] = {
 }
 
 
-def _detect_build_systems(root: Path) -> dict:
+def _detect_build_systems(root: Path, csproj_files: list[Path] | None = None) -> dict:
     detected = []
     package_files = []
     detected_extras: dict = {}
 
-    # Discover .csproj files once — reused for both dotnet detection (the
-    # **/*.csproj marker) and parsing below, instead of walking the tree twice.
-    csproj_files = sorted(root.rglob("*.csproj"))
+    # .csproj files come from the shared project walk when available, so a
+    # build_payload call adds no extra traversal and bin/obj artifact copies
+    # (already excluded by the walk) never produce duplicate dotnet_projects.
+    # Fallback rglob keeps isolated callers/tests working.
+    if csproj_files is None:
+        csproj_files = sorted(root.rglob("*.csproj"))
+    else:
+        csproj_files = sorted(csproj_files)
 
     for system, markers in _BUILD_MARKERS.items():
         for marker in markers:

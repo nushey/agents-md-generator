@@ -151,7 +151,9 @@ def build_payload(
     # Single filesystem traversal shared by all structure scanners below.
     walked_files = _walk_files(root, config)
     structure = _scan_project_structure(root, config, walked_files)
-    build_system = _detect_build_systems(root)
+    build_system = _detect_build_systems(
+        root, [p for p, _rel in walked_files if p.suffix.lower() == ".csproj"]
+    )
 
     existing_agents_md: str | None = None
     if include_agents_md_context:

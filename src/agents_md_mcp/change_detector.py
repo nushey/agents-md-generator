@@ -3,6 +3,7 @@
 import fnmatch
 import hashlib
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from .cache import CacheData
 from .config import ProjectConfig
 from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileChange
-from .path_utils import normalize_path, rel_posix
+from .path_utils import normalize_path, prune_dirnames, rel_posix
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,35 @@ def _git_ls_files(project_path: Path) -> list[str] | None:
     return None
 
 
-def _fs_walk(project_path: Path, gitignore_spec=None) -> list[str]:
-    """Fallback: walk filesystem when not a git repo, respecting .gitignore."""
+def _fs_walk(
+    project_path: Path,
+    gitignore_spec=None,
+    config: ProjectConfig | None = None,
+) -> list[str]:
+    """Fallback: walk filesystem when not a git repo, respecting .gitignore.
+
+    When *config* is provided, excluded directories are pruned before descent —
+    their files would be dropped by `_filter_paths` anyway, so skipping the
+    subtree is equivalent and avoids enumerating dependency trees.
+    """
     files = []
-    for p in project_path.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = rel_posix(p, project_path)
-        if gitignore_spec and is_gitignored(rel, gitignore_spec):
-            continue
-        files.append(rel)
+    for dirpath, dirnames, filenames in os.walk(project_path):
+        rel_dir = rel_posix(Path(dirpath), project_path)
+        dirnames.sort()
+        filenames.sort()
+        if config is not None:
+            prune_dirnames(
+                dirnames, rel_dir, config._exclude_dir_tokens, config._exclude_globs
+            )
+        for name in filenames:
+            rel = f"{rel_dir}/{name}" if rel_dir != "." else name
+            if gitignore_spec and is_gitignored(rel, gitignore_spec):
+                continue
+            # os.walk filenames include FIFOs, sockets, and broken symlinks;
+            # hashing a FIFO would block forever waiting for a writer.
+            if not (Path(dirpath) / name).is_file():
+                continue
+            files.append(rel)
     return files
 
 
@@ -149,8 +169,8 @@ def detect_changes(
         gitignore_spec = None
     else:
         logger.warning("Not a git repo, falling back to filesystem walk")
-        gitignore_spec = load_gitignore_spec(root)
-        raw_files = _fs_walk(root, gitignore_spec)
+        gitignore_spec = load_gitignore_spec(root, config)
+        raw_files = _fs_walk(root, gitignore_spec, config)
 
     filtered = _filter_paths(raw_files, config, gitignore_spec)
 

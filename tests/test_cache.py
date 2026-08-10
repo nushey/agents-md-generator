@@ -57,6 +57,6 @@ def test_is_cache_valid_bad_commit(tmp_path: Path) -> None:
 
 def test_make_empty_cache() -> None:
     cache = make_empty_cache(base_commit="abc")
-    assert cache.version == "1.0"
+    assert cache.version == "2.0"
     assert cache.base_commit == "abc"
     assert cache.files == {}

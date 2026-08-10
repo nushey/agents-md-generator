@@ -16,7 +16,7 @@ from agents_md_mcp.config import (
 def test_load_config_defaults(tmp_path: Path) -> None:
     """No config file → defaults are returned."""
     cfg = load_config(tmp_path)
-    assert cfg.project_size == "medium"
+    assert cfg.project_size == "auto"
     assert cfg.profile is SIZE_PROFILES["medium"]
     assert cfg.languages == "auto"
     assert len(cfg.exclude) > 0
@@ -40,7 +40,7 @@ def test_load_config_corrupt_file(tmp_path: Path) -> None:
     """Corrupt JSON falls back to defaults without raising."""
     (tmp_path / ".agents-config.json").write_text("{ not valid json", encoding="utf-8")
     cfg = load_config(tmp_path)
-    assert cfg.project_size == "medium"
+    assert cfg.project_size == "auto"
 
 
 def test_language_for_extension_auto() -> None:

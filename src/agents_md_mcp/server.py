@@ -32,9 +32,10 @@ from .cache import (
     make_empty_cache,
     save_cache,
 )
-from .change_detector import detect_changes
-from .config import load_config
+from .change_detector import NotAGitRepositoryError, detect_changes
+from .config import SIZE_PROFILES, load_config
 from .context_builder import build_payload
+from .project_scanner import detect_env_vars_for_changes, detect_root_env_vars
 from .symbol_utils import _is_public, _is_test_file
 from .connectors import setup_connectors, get_connector_spec
 from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput, GenerateAgentsMdInput
@@ -53,6 +54,13 @@ PAYLOAD_FILENAME = "payload.json"
 # (~1.2-1.5x for dense JSON-of-JSON). 20k source chars keeps the final escaped
 # response comfortably under MCP client tool-result token limits.
 CHUNK_CHARS = 20_000
+
+# Hard ceiling on the serialized payload. Beyond this the consuming agent
+# drowns in chunks regardless of how fast the scan was. When exceeded, the
+# payload is degraded in order: rebuild with the "large" profile → strip method
+# signatures → truncate full_analysis. Each step is recorded in
+# metadata.degradations so the agent knows detail was dropped.
+PAYLOAD_BUDGET_CHARS = 300_000
 
 # The server is long-lived: cache the payload text per path so sequential
 # read_payload_chunk calls slice one in-memory string instead of re-reading the
@@ -88,6 +96,55 @@ def _read_payload_cached(payload_path: Path) -> str:
 def _compute_total_chunks(payload_text: str) -> int:
     """Number of character-based chunks needed to stream the payload."""
     return max(1, (len(payload_text) + CHUNK_CHARS - 1) // CHUNK_CHARS)
+
+
+def _enforce_budget(payload, payload_json, dump, config, rebuild):
+    """Degrade an over-budget payload until it fits PAYLOAD_BUDGET_CHARS.
+
+    Ladder: (1) rebuild with the harsher "large" profile, (2) strip method
+    signatures, (3) truncate full_analysis proportionally. Applied steps are
+    recorded in metadata.degradations.
+    """
+    degradations: list[str] = []
+
+    if config.project_size != "large":
+        config.project_size = "large"
+        config.profile = SIZE_PROFILES["large"]
+        payload = rebuild()
+        payload_json = dump(payload)
+        degradations.append("reprofiled_to_large")
+
+    if len(payload_json) > PAYLOAD_BUDGET_CHARS:
+        for entry in payload.get("full_analysis", []):
+            for sym in entry.get("symbols", []):
+                sym.pop("methods", None)
+                sym.pop("total_methods", None)
+            entry.pop("common_methods", None)
+        payload["method_patterns"] = {}
+        payload_json = dump(payload)
+        degradations.append("stripped_method_signatures")
+
+    truncated = 0
+    while len(payload_json) > PAYLOAD_BUDGET_CHARS and payload.get("full_analysis"):
+        entries = payload["full_analysis"]
+        # Keep a proportional slice with 10% margin; re-dump and repeat if needed.
+        keep = max(1, int(len(entries) * PAYLOAD_BUDGET_CHARS / len(payload_json) * 0.9))
+        if keep >= len(entries):
+            break
+        truncated += len(entries) - keep
+        payload["full_analysis"] = entries[:keep]
+        payload_json = dump(payload)
+    if truncated:
+        payload["metadata"]["truncated_entries"] = truncated
+        degradations.append("truncated_full_analysis")
+
+    payload["metadata"]["degradations"] = degradations
+    payload_json = dump(payload)
+    logger.warning(
+        "Payload exceeded budget (%d chars); degradations applied: %s → %d chars",
+        PAYLOAD_BUDGET_CHARS, degradations, len(payload_json),
+    )
+    return payload, payload_json
 
 
 def _get_client_name(ctx: Context) -> str | None:
@@ -153,6 +210,8 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     try:
         result = await _run_pipeline(project_path, params.force_full_scan)
         return json.dumps(result, indent=2, ensure_ascii=False)
+    except NotAGitRepositoryError as exc:
+        return json.dumps({"error": str(exc)}, ensure_ascii=False)
     except Exception as exc:
         logger.exception("Pipeline failed for %s", project_path)
         return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False)
@@ -178,7 +237,7 @@ async def _run_pipeline(
     scan_type = "incremental" if cache is not None else "full"
     logger.info("Scan type: %s", scan_type)
 
-    # 3. Detect changes
+    # 3. Detect changes (raises NotAGitRepositoryError on non-git projects)
     changes = detect_changes(project_path, config, cache)
 
     if not changes:
@@ -200,6 +259,18 @@ async def _run_pipeline(
     new_analyses = analyze_changes(project_path, changes, config, cache)
     logger.info("Analyzed %d files", len(new_analyses))
 
+    # 4b. Env vars: scan only changed files; unchanged files contribute their
+    #     cached env_vars. Cold starts cover everything because every file is a change.
+    env_map = detect_env_vars_for_changes(project_path, config, changes)
+    env_union: set[str] = set().union(*env_map.values()) if env_map else set()
+    changed_paths = {c.path for c in changes}
+    if cache is not None:
+        for path, cached_file in cache.files.items():
+            if path not in changed_paths:
+                env_union.update(cached_file.env_vars)
+    env_union |= detect_root_env_vars(project_path)
+    env_vars = sorted(env_union)
+
     # 5. Build payload
     payload = build_payload(
         project_path=project_path,
@@ -209,13 +280,13 @@ async def _run_pipeline(
         cache=cache,
         scan_type=scan_type,
         include_agents_md_context=include_agents_md_context,
+        env_vars=env_vars,
     )
 
     # 6. Update and save cache
     current_commit = get_current_commit(project_path)
     new_cache = make_empty_cache(base_commit=current_commit)
     if cache is not None:
-        changed_paths = {c.path for c in changes}
         for path, cached_file in cache.files.items():
             if path not in changed_paths:
                 new_cache.files[path] = cached_file
@@ -233,6 +304,8 @@ async def _run_pipeline(
                     visibility=s.visibility,
                     signature=s.signature,
                     decorators=s.decorators,
+                    implements=s.implements,
+                    parent=s.parent,
                 )
                 for s in analysis.symbols
                 if _is_public(s)
@@ -240,16 +313,35 @@ async def _run_pipeline(
             new_cache.files[change.path] = CachedFile(
                 hash=change.new_hash,
                 symbols=symbols,
+                env_vars=env_map.get(change.path, []),
             )
     save_cache(project_path, new_cache)
     logger.info("Cache saved with %d entries", len(new_cache.files))
 
-    # 7. Write payload to disk — never send it inline over MCP.
-    #    Always compact, single-line JSON: the agent reassembles and parses it,
-    #    so pretty-printing adds no value and would only complicate chunk math.
+    # 7. Serialize within budget, then write to disk — never send it inline over
+    #    MCP. Always compact, single-line JSON: the agent reassembles and parses
+    #    it, so pretty-printing adds no value and would only complicate chunk math.
     #    ensure_ascii=False keeps accented identifiers readable instead of \uXXXX.
+    def _dump(p: dict) -> str:
+        return json.dumps(p, default=str, separators=(",", ":"), ensure_ascii=False)
+
+    payload_json = _dump(payload)
+    if len(payload_json) > PAYLOAD_BUDGET_CHARS:
+        payload, payload_json = _enforce_budget(
+            payload, payload_json, _dump, config,
+            rebuild=lambda: build_payload(
+                project_path=project_path,
+                config=config,
+                changes=changes,
+                new_analyses=new_analyses,
+                cache=cache,
+                scan_type=scan_type,
+                include_agents_md_context=include_agents_md_context,
+                env_vars=env_vars,
+            ),
+        )
+
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
-    payload_json = json.dumps(payload, default=str, separators=(",", ":"), ensure_ascii=False)
     payload_path.write_text(payload_json, encoding="utf-8")
     # Invalidate any cached text for this path — the identity key alone cannot
     # rule out a rewrite that lands on the same (mtime_ns, size).
@@ -412,6 +504,8 @@ async def generate_agents_md(params: GenerateAgentsMdInput, ctx: Context) -> str
             f"scan_codebase again. Complete all steps autonomously."
         )
         return json.dumps(result, indent=2, ensure_ascii=False)
+    except NotAGitRepositoryError as exc:
+        return json.dumps({"error": str(exc)}, ensure_ascii=False)
     except Exception as exc:
         logger.exception("generate_agents_md failed for %s", project_path)
         return json.dumps({"error": f"Failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False)

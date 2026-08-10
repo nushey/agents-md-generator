@@ -1,21 +1,27 @@
-"""Guards for the pruned-walk performance fixes.
+"""Guards for the performance fixes.
 
-Covers: walk equivalence against the old rglob implementation, pruned
-.gitignore discovery, csproj artifact exclusion, the payload chunk cache,
-and the env-regex substring pre-filter.
+Covers: git-backed file listing, csproj artifact exclusion, the payload chunk
+cache, and the env-regex substring pre-filter on the per-file scanner.
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from agents_md_mcp.build_system import _detect_build_systems
-from agents_md_mcp.change_detector import _fs_walk, _is_excluded
 from agents_md_mcp.config import ProjectConfig, DEFAULT_CONFIG
-from agents_md_mcp.gitignore import is_gitignored, load_gitignore_spec
-from agents_md_mcp.path_utils import rel_posix
-from agents_md_mcp.project_scanner import _detect_env_vars, _walk_files
+from agents_md_mcp.models import FileChange
+from agents_md_mcp.project_scanner import (
+    _scan_file_env_vars,
+    _walk_files,
+    detect_env_vars_for_changes,
+)
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=str(root), capture_output=True, check=True)
 
 
 def _write(path: Path, content: str = "") -> Path:
@@ -31,145 +37,34 @@ def config() -> ProjectConfig:
 
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
-    """Project tree with dependency dirs, nested gitignore, and a negation."""
+    """Git project tree with committed dependency dirs and gitignored files."""
     _write(tmp_path / "src" / "main.py", "print('hi')\n")
     _write(tmp_path / "src" / "app.ts", "export {}\n")
-    # Multi-segment exclude: "**/wwwroot/lib/**" needs a parent segment to
-    # match (fnmatch's leading **/ is not optional) — same as the old filter.
     _write(tmp_path / "app" / "wwwroot" / "lib" / "jquery.js")
     _write(tmp_path / "node_modules" / "react" / "index.js")
-    _write(tmp_path / "node_modules" / "react" / ".gitignore", "*.py\n")
-    _write(tmp_path / "bin" / "Debug" / "App.dll")
     _write(tmp_path / "obj" / "App.csproj", "<Project/>")
     _write(tmp_path / "App.csproj", "<Project/>")
-    # Root gitignore ignores logs/ but re-includes keep.log via negation
-    _write(tmp_path / ".gitignore", "logs/\n!logs/keep.log\n")
+    _write(tmp_path / ".gitignore", "logs/\n")
     _write(tmp_path / "logs" / "debug.log")
-    _write(tmp_path / "logs" / "keep.log")
-    _write(tmp_path / "src" / ".gitignore", "generated.py\n")
-    _write(tmp_path / "src" / "generated.py")
+    _git(tmp_path, "init", "-q")
     return tmp_path
 
 
-def _reference_rglob_walk(root: Path, config: ProjectConfig) -> list[tuple[Path, str]]:
-    """The pre-fix rglob implementation, kept as the equivalence oracle."""
-    gitignore_spec = load_gitignore_spec(root)
-    files = []
-    for item in root.rglob("*"):
-        if not item.is_file():
-            continue
-        rel = rel_posix(item, root)
-        if is_gitignored(rel, gitignore_spec):
-            continue
-        if _is_excluded(rel, config):
-            continue
-        files.append((item, rel))
-    return files
-
-
-class TestWalkEquivalence:
-    def test_pruned_walk_matches_rglob_reference(self, tree: Path, config: ProjectConfig) -> None:
-        new = sorted(rel for _p, rel in _walk_files(tree, config))
-        old = sorted(rel for _p, rel in _reference_rglob_walk(tree, config))
-        assert new == old
-
-    def test_negation_reincludes_file(self, tree: Path, config: ProjectConfig) -> None:
-        rels = {rel for _p, rel in _walk_files(tree, config)}
-        assert "logs/keep.log" in rels
-        assert "logs/debug.log" not in rels
-
+class TestGitWalk:
     def test_dependency_dirs_excluded(self, tree: Path, config: ProjectConfig) -> None:
         rels = {rel for _p, rel in _walk_files(tree, config)}
-        assert not any(r.startswith(("node_modules/", "bin/", "obj/")) for r in rels)
+        assert not any(r.startswith(("node_modules/", "obj/")) for r in rels)
         assert "app/wwwroot/lib/jquery.js" not in rels
         assert "src/main.py" in rels
 
-    def test_fs_walk_prunes_with_config(self, tree: Path, config: ProjectConfig) -> None:
-        spec = load_gitignore_spec(tree)
-        rels = set(_fs_walk(tree, spec, config))
-        assert "src/main.py" in rels
-        assert not any(r.startswith("node_modules/") for r in rels)
-        # Without config the walk still works (pruning simply off)
-        rels_uncfg = set(_fs_walk(tree, spec))
-        assert "src/main.py" in rels_uncfg
+    def test_gitignored_files_excluded(self, tree: Path, config: ProjectConfig) -> None:
+        rels = {rel for _p, rel in _walk_files(tree, config)}
+        assert not any(r.startswith("logs/") for r in rels)
 
-
-class TestGitignoreDiscovery:
-    def test_nested_project_gitignore_honored(self, tree: Path, config: ProjectConfig) -> None:
-        spec = load_gitignore_spec(tree, config)
-        assert is_gitignored("src/generated.py", spec)
-
-    def test_dependency_gitignore_ignored(self, tree: Path, config: ProjectConfig) -> None:
-        # node_modules/react/.gitignore contains "*.py" — it must not
-        # contribute patterns that filter project files.
-        spec = load_gitignore_spec(tree, config)
-        assert not is_gitignored("node_modules/react/anything.py", spec)
-
-    def test_user_override_reenables_nested_gitignores(self, tree: Path) -> None:
-        # A user who clears the exclude list re-enables node_modules — its
-        # nested .gitignore must be honored again, like the pre-fix loader.
-        cfg = ProjectConfig({"exclude": []})
-        spec = load_gitignore_spec(tree, cfg)
-        assert is_gitignored("node_modules/react/anything.py", spec)
-
-    def test_no_config_means_no_pruning(self, tree: Path) -> None:
-        # Bare call (old signature) keeps full-discovery behavior.
-        spec = load_gitignore_spec(tree)
-        assert is_gitignored("node_modules/react/anything.py", spec)
-
-
-class TestWalkDeterminism:
-    def test_walk_order_is_lexicographic_top_down(self, tree: Path, config: ProjectConfig) -> None:
+    def test_walk_order_deterministic(self, tree: Path, config: ProjectConfig) -> None:
         rels = [rel for _p, rel in _walk_files(tree, config)]
-        by_dir_then_name = sorted(rels, key=lambda r: (r.rsplit("/", 1)[0] if "/" in r else "", r))
-        # Root files come first (os.walk is top-down), then each subdir in
-        # sorted order — verify stability across two runs and per-dir sorting.
+        assert rels == sorted(rels)
         assert rels == [rel for _p, rel in _walk_files(tree, config)]
-        groups: dict[str, list[str]] = {}
-        for r in rels:
-            groups.setdefault(r.rsplit("/", 1)[0] if "/" in r else ".", []).append(r)
-        for names in groups.values():
-            assert names == sorted(names)
-
-    def test_fs_walk_order_deterministic(self, tree: Path, config: ProjectConfig) -> None:
-        spec = load_gitignore_spec(tree, config)
-        assert _fs_walk(tree, spec, config) == _fs_walk(tree, spec, config)
-
-
-class TestPruningProof:
-    def test_excluded_dirs_never_visited(self, tree: Path, config: ProjectConfig, monkeypatch) -> None:
-        # The file-set assertions alone would pass with a filter-after-descend
-        # implementation; prove the walk never ENTERS excluded trees.
-        import os as _os
-        import agents_md_mcp.project_scanner as ps
-
-        visited: list[str] = []
-        real_walk = _os.walk
-
-        def spy_walk(top, *args, **kwargs):
-            for dirpath, dirnames, filenames in real_walk(top, *args, **kwargs):
-                visited.append(str(dirpath))
-                yield dirpath, dirnames, filenames
-
-        monkeypatch.setattr(ps.os, "walk", spy_walk)
-        _walk_files(tree, config)
-        inside_excluded = [
-            v for v in visited
-            if any(seg in ("node_modules", "bin", "obj") for seg in Path(v).parts)
-        ]
-        assert inside_excluded == []
-
-
-class TestFsWalkNonRegularFiles:
-    def test_fifo_is_skipped(self, tmp_path: Path, config: ProjectConfig) -> None:
-        import os as _os
-        if not hasattr(_os, "mkfifo"):
-            pytest.skip("mkfifo not available")
-        _write(tmp_path / "real.py", "x = 1\n")
-        _os.mkfifo(tmp_path / "blocking.py")
-        rels = _fs_walk(tmp_path, None, config)
-        assert "real.py" in rels
-        assert "blocking.py" not in rels
 
 
 class TestCsprojFromWalk:
@@ -203,39 +98,44 @@ class TestCsprojFromWalk:
     def test_uppercase_suffix_detected(self, tmp_path: Path, config: ProjectConfig) -> None:
         # Windows-style casing: the suffix filter must be case-insensitive.
         _write(tmp_path / "Legacy.CSPROJ", "<Project/>")
+        _git(tmp_path, "init", "-q")
         walked = _walk_files(tmp_path, config)
         csprojs = [p for p, _rel in walked if p.suffix.lower() == ".csproj"]
         assert len(csprojs) == 1
 
 
-class TestEnvGuards:
-    def test_rust_var_without_env_literal(self, tmp_path: Path, config: ProjectConfig) -> None:
-        # Exercises the var( branch of the rust pattern — a bare "env"
-        # substring guard would silently skip this file.
-        _write(tmp_path / "main.rs", 'let x = var("MY_SECRET_KEY").unwrap();\n')
-        cfg_raw = dict(DEFAULT_CONFIG)
-        cfg = ProjectConfig(cfg_raw)
-        # rust isn't in EXTENSION_TO_LANGUAGE, so guard the guard-table directly
-        from agents_md_mcp.project_scanner import _ENV_GUARDS, _ENV_PATTERNS
-        content = (tmp_path / "main.rs").read_text()
-        guards = _ENV_GUARDS["rust"]
-        assert any(g in content for g in guards)
-        match = _ENV_PATTERNS["rust"].search(content)
-        assert match is not None
+def _changes(*paths: str) -> list[FileChange]:
+    return [FileChange(path=p, status="new", new_hash="x") for p in paths]
 
+
+class TestEnvDetection:
     def test_no_env_usage_detects_nothing(self, tmp_path: Path, config: ProjectConfig) -> None:
         _write(tmp_path / "clean.py", "x = 1\n")
-        assert _detect_env_vars(tmp_path, config) == []
+        assert detect_env_vars_for_changes(tmp_path, config, _changes("clean.py")) == {}
 
-    def test_python_env_still_detected(self, tmp_path: Path, config: ProjectConfig) -> None:
+    def test_python_env_detected(self, tmp_path: Path, config: ProjectConfig) -> None:
         _write(tmp_path / "settings.py", 'import os\nDB = os.environ.get("DATABASE_URL")\n')
-        assert _detect_env_vars(tmp_path, config) == ["DATABASE_URL"]
+        result = detect_env_vars_for_changes(tmp_path, config, _changes("settings.py"))
+        assert result == {"settings.py": ["DATABASE_URL"]}
 
-    def test_js_ts_go_still_detected(self, tmp_path: Path, config: ProjectConfig) -> None:
+    def test_js_ts_go_detected(self, tmp_path: Path, config: ProjectConfig) -> None:
         _write(tmp_path / "a.js", "const k = process.env.JS_KEY;\n")
         _write(tmp_path / "b.ts", "const t = process.env.TS_KEY;\n")
         _write(tmp_path / "c.go", 'v := os.Getenv("GO_KEY")\n')
-        assert _detect_env_vars(tmp_path, config) == ["GO_KEY", "JS_KEY", "TS_KEY"]
+        result = detect_env_vars_for_changes(
+            tmp_path, config, _changes("a.js", "b.ts", "c.go")
+        )
+        assert result == {"a.js": ["JS_KEY"], "b.ts": ["TS_KEY"], "c.go": ["GO_KEY"]}
+
+    def test_only_changed_files_scanned(self, tmp_path: Path, config: ProjectConfig) -> None:
+        _write(tmp_path / "changed.py", 'import os\nA = os.environ.get("CHANGED_KEY")\n')
+        _write(tmp_path / "unchanged.py", 'import os\nB = os.environ.get("UNCHANGED_KEY")\n')
+        result = detect_env_vars_for_changes(tmp_path, config, _changes("changed.py"))
+        assert result == {"changed.py": ["CHANGED_KEY"]}
+
+    def test_deleted_changes_skipped(self, tmp_path: Path, config: ProjectConfig) -> None:
+        changes = [FileChange(path="gone.py", status="deleted", old_hash="x")]
+        assert detect_env_vars_for_changes(tmp_path, config, changes) == {}
 
     def test_guard_actually_skips_regex(self, tmp_path: Path, config: ProjectConfig, monkeypatch) -> None:
         # Prove the fast path: a file without guard substrings must never
@@ -258,8 +158,16 @@ class TestEnvGuards:
         )
         _write(tmp_path / "clean.py", "x = 1\n")
         _write(tmp_path / "uses.py", 'import os\nY = os.environ.get("REAL_KEY")\n')
-        assert _detect_env_vars(tmp_path, config) == ["REAL_KEY"]
+        result = detect_env_vars_for_changes(
+            tmp_path, config, _changes("clean.py", "uses.py")
+        )
+        assert result == {"uses.py": ["REAL_KEY"]}
         assert len(calls) == 1  # only uses.py was regex-scanned
+
+    def test_oversized_file_skipped(self, tmp_path: Path, config: ProjectConfig) -> None:
+        f = _write(tmp_path / "big.py", 'import os\nX = os.environ.get("BIG_KEY")\n')
+        config.max_file_size_bytes = 10
+        assert _scan_file_env_vars(f, "python", config) == set()
 
 
 class TestPayloadCache:

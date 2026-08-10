@@ -7,7 +7,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import CacheData, CachedFile
+from .models import CACHE_VERSION, CacheData, CachedFile
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,12 @@ def load_cache(project_path: str | Path) -> CacheData | None:
         return None
     try:
         raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        if raw.get("version") != CACHE_VERSION:
+            logger.warning(
+                "Cache at %s has version %s (expected %s), will do cold start",
+                cache_path, raw.get("version"), CACHE_VERSION,
+            )
+            return None
         return CacheData.model_validate(raw)
     except Exception as exc:
         logger.warning("Cache at %s is corrupt (%s), will do cold start", cache_path, exc)
@@ -44,8 +50,14 @@ def save_cache(project_path: str | Path, data: CacheData) -> None:
     """Persist cache to disk."""
     cache_path = get_project_cache_dir(project_path) / CACHE_FILENAME
     try:
+        # Compact JSON: at tens of thousands of entries, indentation multiplies
+        # both file size and parse time for zero benefit (machine-only file).
+        # exclude_defaults would drop `version` (it equals its default), so it
+        # is re-added explicitly — load_cache rejects caches without it.
+        payload = data.model_dump(mode="json", exclude_defaults=True)
+        payload["version"] = data.version
         cache_path.write_text(
-            data.model_dump_json(indent=2, exclude_defaults=True),
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
             encoding="utf-8",
         )
         logger.debug("Cache saved to %s", cache_path)

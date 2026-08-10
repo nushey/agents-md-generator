@@ -3,10 +3,13 @@ from pathlib import Path
 from agents_md_mcp.context_builder import build_payload
 from agents_md_mcp.config import ProjectConfig, DEFAULT_CONFIG
 
+from tests.conftest import git_init
+
 
 def _payload(tmp_path, include_agents_md_context):
     root = tmp_path / "myproj"
     root.mkdir()
+    git_init(root)
     (root / "AGENTS.md").write_text("existing agents content")
     config = ProjectConfig(DEFAULT_CONFIG)
     return build_payload(

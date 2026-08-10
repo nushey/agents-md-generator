@@ -3,17 +3,17 @@
 import logging
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 from .aggregator import _aggregate_by_directory
 from .ast_analyzer import classify_impact, diff_analysis
 from .build_system import _detect_build_systems
 from .cache import CacheData
-from .config import ProjectConfig
+from .config import EXTENSION_TO_LANGUAGE, ProjectConfig
 from .instructions import _build_instructions
 from .models import FileAnalysis, FileChange
 from .project_scanner import (
     _detect_entry_points,
-    _detect_env_vars,
     _detect_wiring,
     _scan_project_structure,
     _walk_files,
@@ -33,7 +33,32 @@ logger = logging.getLogger(__name__)
 _METHOD_DEDUP_MIN_OCCURRENCES = 3  # signature must appear >= 3 times to be deduplicated
 
 
-def _build_interface_impl_map(analyses: dict[str, FileAnalysis]) -> dict[str, list[str]]:
+def _merged_analyses(
+    new_analyses: dict[str, FileAnalysis],
+    cache: CacheData | None,
+    changes: list[FileChange],
+) -> dict:
+    """Project-wide symbol view: fresh analyses + cached symbols for unchanged files.
+
+    Without this, incremental scans would compute wiring and the interface→impl
+    map from changed files only, silently shrinking both to whatever changed
+    that day. Cached entries are wrapped in SimpleNamespace — the consumers only
+    need .language and .symbols with symbol attributes CachedSymbol provides.
+    """
+    merged: dict = dict(new_analyses)
+    if cache is None:
+        return merged
+    deleted = {c.path for c in changes if c.status == "deleted"}
+    for path, cached_file in cache.files.items():
+        if path in merged or path in deleted or not cached_file.symbols:
+            continue
+        lang = EXTENSION_TO_LANGUAGE.get(Path(path).suffix.lower())
+        if lang:
+            merged[path] = SimpleNamespace(language=lang, symbols=cached_file.symbols)
+    return merged
+
+
+def _build_interface_impl_map(analyses: dict) -> dict[str, list[str]]:
     """Build a project-wide interface → implementors map.
 
     Sources:
@@ -130,6 +155,7 @@ def build_payload(
     cache: CacheData | None,
     scan_type: str = "full",
     include_agents_md_context: bool = False,
+    env_vars: list[str] | None = None,
 ) -> dict:
     """
     Assemble the complete JSON payload to return from the MCP tool.
@@ -264,15 +290,18 @@ def build_payload(
     method_patterns = _deduplicate_methods(full_analysis_payload)
     _strip_language_from_file_entries(full_analysis_payload)
 
-    env_vars = _detect_env_vars(root, config, walked_files)
     entry_points = _detect_entry_points(root, config, walked_files)
-    wiring = _detect_wiring(new_analyses, profile)
-    interface_impl_map = _build_interface_impl_map(new_analyses)
+    # Project-wide maps come from the merged view (fresh + cached symbols) so
+    # incremental scans keep the complete picture, not just changed files.
+    merged = _merged_analyses(new_analyses, cache, changes)
+    wiring = _detect_wiring(merged, profile)
+    interface_impl_map = _build_interface_impl_map(merged)
 
     payload: dict = {
         "metadata": {
             "project_name": project_name,
-            "languages_detected": list({a.language for a in new_analyses.values()}),
+            "project_size": config.project_size,
+            "languages_detected": sorted({a.language for a in merged.values()}),
         },
     }
     if include_agents_md_context:
@@ -292,7 +321,7 @@ def build_payload(
     payload["project_structure"] = structure
     payload["build_system"] = build_system
     payload["entry_points"] = entry_points
-    payload["env_vars"] = env_vars
+    payload["env_vars"] = env_vars if env_vars is not None else []
     payload["changes"] = changes_payload
     # Bulkiest section last — it spans most chunks.
     payload["full_analysis"] = full_analysis_payload

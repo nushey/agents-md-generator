@@ -100,10 +100,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ],
     "include": [],
     "languages": "auto",
-    "project_size": "medium",
+    "project_size": "auto",
     "agents_md_path": "./AGENTS.md",
     "max_file_size_bytes": 1_048_576,  # 1MB
 }
+
+# Auto-profile thresholds: supported source files counted at scan time.
+_AUTO_SMALL_MAX_FILES = 800
+_AUTO_MEDIUM_MAX_FILES = 5000
 
 # Extension → tree-sitter language key
 EXTENSION_TO_LANGUAGE: dict[str, str] = {
@@ -144,6 +148,23 @@ class ProjectConfig:
         self.profile: SizeProfile = SIZE_PROFILES.get(
             self.project_size, SIZE_PROFILES["medium"]
         )
+
+    def resolve_profile(self, supported_file_count: int) -> None:
+        """Resolve project_size='auto' from the real file count.
+
+        Called once per scan by detect_changes, the first point where the
+        project-wide supported-file count is known. Explicit sizes in the
+        config file are respected and never overridden.
+        """
+        if self.project_size != "auto":
+            return
+        if supported_file_count <= _AUTO_SMALL_MAX_FILES:
+            self.project_size = "small"
+        elif supported_file_count <= _AUTO_MEDIUM_MAX_FILES:
+            self.project_size = "medium"
+        else:
+            self.project_size = "large"
+        self.profile = SIZE_PROFILES[self.project_size]
 
     def language_for_extension(self, ext: str) -> Optional[str]:
         """Return the tree-sitter language key for a file extension, or None if unsupported."""

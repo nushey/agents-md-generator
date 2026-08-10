@@ -86,7 +86,8 @@ class AnalysisDiff(BaseModel):
 
 
 class CachedSymbol(BaseModel):
-    """Minimal symbol stored in cache — only the fields needed for semantic diff."""
+    """Minimal symbol stored in cache — the fields needed for semantic diff plus
+    project-wide maps (wiring, interface→impl) rebuilt from cache on incremental scans."""
 
     name: str
     kind: Literal[
@@ -96,6 +97,8 @@ class CachedSymbol(BaseModel):
     visibility: Optional[str] = None
     signature: Optional[str] = None
     decorators: list[str] = Field(default_factory=list)
+    implements: list[str] = Field(default_factory=list)
+    parent: Optional[str] = None
 
     @field_validator("signature")
     @classmethod
@@ -113,12 +116,18 @@ class CachedFile(BaseModel):
 
     hash: str
     symbols: list[CachedSymbol] = Field(default_factory=list)
+    env_vars: list[str] = Field(default_factory=list)
+
+
+# Bump when the cache schema or hash format changes — a mismatch forces a cold
+# start instead of silently misinterpreting old data (e.g. sha256 vs git blob SHAs).
+CACHE_VERSION = "2.0"
 
 
 class CacheData(BaseModel):
     """Root cache structure stored in .agents-cache.json."""
 
-    version: str = "1.0"
+    version: str = CACHE_VERSION
     last_run: str
     base_commit: Optional[str] = None
     files: dict[str, CachedFile] = Field(default_factory=dict)
@@ -148,12 +157,11 @@ class ScanCodebaseInput(BaseModel):
         description="Path to the project root. Default: current directory.",
     )
     force_full_scan: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Force a full scan ignoring any existing cache. Defaults to True — "
-            "direct calls always perform a full scan for complete context. "
-            "Set to False only when called as part of an incremental update workflow "
-            "(e.g. orchestrated by generate_agents_md)."
+            "Force a full scan ignoring any existing cache. Defaults to False — "
+            "incremental scans reuse the cache and only re-analyze changed files. "
+            "Set to True only when the user explicitly requests a full rescan."
         ),
     )
 

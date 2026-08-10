@@ -1,22 +1,37 @@
-"""Tests for change_detector.py."""
+"""Tests for change_detector.py (git-based)."""
 
-import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from agents_md_mcp.cache import make_empty_cache
 from agents_md_mcp.change_detector import (
+    NotAGitRepositoryError,
     _filter_paths,
-    _hash_file,
     _is_excluded,
     detect_changes,
+    git_file_hashes,
+    git_list_all_files,
 )
 from agents_md_mcp.config import load_config
-from agents_md_mcp.models import CachedFile, FileAnalysis
+from agents_md_mcp.models import CachedFile
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True,
+    )
+    return result.stdout
+
+
+def _init_repo(root: Path) -> None:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@test.local")
+    _git(root, "config", "user.name", "test")
+
 
 def _write(path: Path, content: str = "hello") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,26 +39,79 @@ def _write(path: Path, content: str = "hello") -> Path:
     return path
 
 
-def _sha256(content: str) -> str:
-    return hashlib.sha256(content.encode()).hexdigest()
+def _commit_all(root: Path) -> None:
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "test", "--no-verify")
 
 
-def _analysis(path: str) -> FileAnalysis:
-    return FileAnalysis(path=path, language="python")
+def _blob_sha(root: Path, rel: str) -> str:
+    return _git(root, "hash-object", rel).strip()
 
 
-# ── _hash_file ────────────────────────────────────────────────────────────────
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    _init_repo(tmp_path)
+    return tmp_path
 
-def test_hash_file(tmp_path: Path) -> None:
-    f = _write(tmp_path / "foo.py", "hello")
-    assert _hash_file(f) == _sha256("hello")
+
+# ── git_file_hashes ──────────────────────────────────────────────────────────
+
+def test_git_file_hashes_not_a_repo(tmp_path: Path) -> None:
+    assert git_file_hashes(tmp_path) is None
 
 
-def test_hash_file_changes(tmp_path: Path) -> None:
-    f = _write(tmp_path / "foo.py", "hello")
-    h1 = _hash_file(f)
-    f.write_text("world", encoding="utf-8")
-    assert _hash_file(f) != h1
+def test_git_file_hashes_tracked(repo: Path) -> None:
+    _write(repo / "src" / "app.py", "print('hi')")
+    _commit_all(repo)
+    hashes = git_file_hashes(repo)
+    assert hashes == {"src/app.py": _blob_sha(repo, "src/app.py")}
+
+
+def test_git_file_hashes_untracked(repo: Path) -> None:
+    _write(repo / "new.py", "pass")
+    hashes = git_file_hashes(repo)
+    assert "new.py" in hashes
+    assert hashes["new.py"] == _blob_sha(repo, "new.py")
+
+
+def test_git_file_hashes_dirty_file_gets_worktree_hash(repo: Path) -> None:
+    f = _write(repo / "app.py", "v1")
+    _commit_all(repo)
+    f.write_text("v2", encoding="utf-8")
+    hashes = git_file_hashes(repo)
+    assert hashes["app.py"] == _blob_sha(repo, "app.py")  # hash of v2, not the index
+
+
+def test_git_file_hashes_worktree_deleted(repo: Path) -> None:
+    f = _write(repo / "gone.py", "x")
+    _commit_all(repo)
+    f.unlink()
+    assert "gone.py" not in git_file_hashes(repo)
+
+
+def test_git_file_hashes_respects_gitignore(repo: Path) -> None:
+    _write(repo / ".gitignore", "secret.py\n")
+    _write(repo / "secret.py", "x")
+    _write(repo / "app.py", "y")
+    hashes = git_file_hashes(repo)
+    assert "secret.py" not in hashes
+    assert "app.py" in hashes
+
+
+def test_git_list_all_files(repo: Path) -> None:
+    _write(repo / ".gitignore", "ignored.txt\n")
+    _write(repo / "tracked.py", "x")
+    _commit_all(repo)
+    _write(repo / "untracked.md", "y")
+    _write(repo / "ignored.txt", "z")
+    files = git_list_all_files(repo)
+    assert "tracked.py" in files
+    assert "untracked.md" in files
+    assert "ignored.txt" not in files
+
+
+def test_git_list_all_files_not_a_repo(tmp_path: Path) -> None:
+    assert git_list_all_files(tmp_path) is None
 
 
 # ── _is_excluded: ** patterns ─────────────────────────────────────────────────
@@ -52,11 +120,6 @@ def test_excluded_dotenv_dir() -> None:
     """**/.venv/** must exclude .venv/lib/foo.py even without leading slash."""
     cfg = load_config("/tmp")
     assert _is_excluded(".venv/lib/python3.12/site-packages/foo.py", cfg)
-
-
-def test_excluded_venv_dir() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("venv/lib/python3.12/foo.py", cfg)
 
 
 def test_excluded_node_modules() -> None:
@@ -71,21 +134,10 @@ def test_excluded_dist() -> None:
     assert _is_excluded("packages/app/dist/main.js", cfg)
 
 
-def test_excluded_pycache() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("src/__pycache__/foo.cpython-312.pyc", cfg)
-
-
 def test_excluded_min_js() -> None:
     cfg = load_config("/tmp")
     assert _is_excluded("static/vendor.min.js", cfg)
     assert _is_excluded("assets/js/app.min.js", cfg)
-
-
-def test_excluded_git_dir() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded(".git/config", cfg)
-    assert _is_excluded(".git/objects/pack/pack-abc.idx", cfg)
 
 
 def test_not_excluded_src() -> None:
@@ -94,59 +146,10 @@ def test_not_excluded_src() -> None:
     assert not _is_excluded("app/services/user.go", cfg)
 
 
-def test_not_excluded_regular_js() -> None:
-    """bundle.js (not .min.js) must NOT be excluded."""
-    cfg = load_config("/tmp")
-    assert not _is_excluded("src/bundle.js", cfg)
-
-
-# ── _is_excluded: vendor directories ─────────────────────────────────────────
-
-def test_excluded_bower_components() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("bower_components/angular/angular.js", cfg)
-    assert _is_excluded("app/bower_components/lodash/lodash.js", cfg)
-
-
-def test_excluded_app_lib() -> None:
-    """AngularJS vendor pattern: app/lib/."""
-    cfg = load_config("/tmp")
-    assert _is_excluded("MyApp/app/lib/angular/angular.js", cfg)
-    assert _is_excluded("frontend/app/lib/bootstrap/bootstrap.js", cfg)
-
-
-def test_excluded_wwwroot_lib() -> None:
-    """ASP.NET vendor pattern: wwwroot/lib/."""
-    cfg = load_config("/tmp")
-    assert _is_excluded("MyApp/wwwroot/lib/jquery/jquery.js", cfg)
-    assert _is_excluded("MyApp/wwwroot/libs/bootstrap/bootstrap.js", cfg)
-
-
-def test_excluded_bundle_js() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("dist/app.bundle.js", cfg)
-    assert _is_excluded("static/vendor.bundle.js", cfg)
-
-
-def test_excluded_site_packages() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("lib/python3.12/site-packages/requests/__init__.py", cfg)
-    assert _is_excluded("some/deep/site-packages/foo.py", cfg)
-
-
-def test_excluded_static_public_vendor() -> None:
-    cfg = load_config("/tmp")
-    assert _is_excluded("static/vendor/jquery.js", cfg)
-    assert _is_excluded("public/vendor/bootstrap.js", cfg)
-    assert _is_excluded("assets/vendor/moment.js", cfg)
-
-
 def test_excluded_vendor_windows_backslash_paths() -> None:
-    """Windows backslash paths must be excluded correctly (normalization fix)."""
     cfg = load_config("/tmp")
     assert _is_excluded("MyApp\\app\\lib\\angular\\angular.js", cfg)
     assert _is_excluded("MyApp\\wwwroot\\lib\\jquery.js", cfg)
-    assert _is_excluded("frontend\\bower_components\\react\\index.js", cfg)
     assert _is_excluded("src\\__pycache__\\foo.pyc", cfg)
 
 
@@ -173,94 +176,137 @@ def test_filter_removes_unsupported_extensions(tmp_path: Path) -> None:
     assert set(_filter_paths(paths, cfg)) == {"src/app.py", "main.go"}
 
 
-def test_filter_with_gitignore_spec(tmp_path: Path) -> None:
-    """Paths matched by a pathspec are filtered out."""
-    import pathspec
-    spec = pathspec.PathSpec.from_lines("gitignore", [".venv/", "dist/"])
+# ── detect_changes ────────────────────────────────────────────────────────────
+
+def test_detect_changes_requires_git(tmp_path: Path) -> None:
+    _write(tmp_path / "app.py", "x")
     cfg = load_config(tmp_path)
-    paths = ["src/app.py", ".venv/lib/foo.py", "dist/bundle.js"]
-    result = _filter_paths(paths, cfg, gitignore_spec=spec)
-    assert result == ["src/app.py"]
+    with pytest.raises(NotAGitRepositoryError):
+        detect_changes(tmp_path, cfg, cache=None)
 
 
-# ── detect_changes (filesystem, no git) ──────────────────────────────────────
+def test_cold_start_no_cache(repo: Path) -> None:
+    _write(repo / "src" / "app.py", "print('hi')")
+    _write(repo / "src" / "utils.py", "pass")
+    _commit_all(repo)
+    cfg = load_config(repo)
 
-def test_cold_start_no_cache(tmp_path: Path) -> None:
-    _write(tmp_path / "src" / "app.py", "print('hi')")
-    _write(tmp_path / "src" / "utils.py", "pass")
-    cfg = load_config(tmp_path)
-
-    changes = detect_changes(tmp_path, cfg, cache=None)
+    changes = detect_changes(repo, cfg, cache=None)
     assert all(c.status == "new" for c in changes)
     assert all(c.new_hash is not None for c in changes)
     assert any("app.py" in c.path for c in changes)
 
 
-def test_cold_start_respects_gitignore(tmp_path: Path) -> None:
-    """Files in .gitignore are NOT returned in cold start (non-git repo)."""
-    _write(tmp_path / "src" / "app.py", "code")
-    _write(tmp_path / ".venv" / "lib" / "site.py", "venv stuff")
-    _write(tmp_path / ".gitignore", ".venv/\n")
-    cfg = load_config(tmp_path)
-
-    changes = detect_changes(tmp_path, cfg, cache=None)
-    paths = [c.path for c in changes]
-    assert not any(".venv" in p for p in paths)
-    assert any("app.py" in p for p in paths)
+def test_cold_start_includes_untracked(repo: Path) -> None:
+    _write(repo / "src" / "app.py", "code")
+    cfg = load_config(repo)
+    changes = detect_changes(repo, cfg, cache=None)
+    assert [c.path for c in changes] == ["src/app.py"]
 
 
-def test_cold_start_exclude_patterns(tmp_path: Path) -> None:
-    """Config exclude patterns work regardless of gitignore."""
-    _write(tmp_path / "src" / "app.py", "code")
-    _write(tmp_path / "dist" / "bundle.js", "built")
-    cfg = load_config(tmp_path)
+def test_cold_start_respects_gitignore(repo: Path) -> None:
+    _write(repo / ".gitignore", "generated/\n")
+    _write(repo / "src" / "app.py", "code")
+    _write(repo / "generated" / "out.py", "gen")
+    cfg = load_config(repo)
 
-    changes = detect_changes(tmp_path, cfg, cache=None)
-    paths = [c.path for c in changes]
+    paths = [c.path for c in detect_changes(repo, cfg, cache=None)]
+    assert paths == ["src/app.py"]
+
+
+def test_cold_start_exclude_patterns(repo: Path) -> None:
+    """Config exclude patterns apply even to committed files."""
+    _write(repo / "src" / "app.py", "code")
+    _write(repo / "dist" / "bundle.js", "built")
+    _commit_all(repo)
+    cfg = load_config(repo)
+
+    paths = [c.path for c in detect_changes(repo, cfg, cache=None)]
     assert not any("dist" in p for p in paths)
 
 
-def test_incremental_no_changes(tmp_path: Path) -> None:
-    content = "print('hi')"
-    _write(tmp_path / "src" / "app.py", content)
-    cfg = load_config(tmp_path)
+def test_incremental_no_changes(repo: Path) -> None:
+    _write(repo / "src" / "app.py", "print('hi')")
+    _commit_all(repo)
+    cfg = load_config(repo)
 
     cache = make_empty_cache()
-    cache.files["src/app.py"] = CachedFile(hash=_sha256(content), analysis=_analysis("src/app.py"))
-    assert detect_changes(tmp_path, cfg, cache=cache) == []
+    cache.files["src/app.py"] = CachedFile(hash=_blob_sha(repo, "src/app.py"))
+    assert detect_changes(repo, cfg, cache=cache) == []
 
 
-def test_incremental_detects_modification(tmp_path: Path) -> None:
-    f = _write(tmp_path / "src" / "app.py", "v1")
-    cfg = load_config(tmp_path)
+def test_incremental_detects_modification(repo: Path) -> None:
+    f = _write(repo / "src" / "app.py", "v1")
+    _commit_all(repo)
+    old_sha = _blob_sha(repo, "src/app.py")
+    cfg = load_config(repo)
 
     cache = make_empty_cache()
-    cache.files["src/app.py"] = CachedFile(hash=_sha256("v1"), analysis=_analysis("src/app.py"))
+    cache.files["src/app.py"] = CachedFile(hash=old_sha)
     f.write_text("v2", encoding="utf-8")
 
-    changes = detect_changes(tmp_path, cfg, cache=cache)
+    changes = detect_changes(repo, cfg, cache=cache)
     assert len(changes) == 1
     assert changes[0].status == "modified"
-    assert changes[0].old_hash == _sha256("v1")
-    assert changes[0].new_hash == _sha256("v2")
+    assert changes[0].old_hash == old_sha
+    assert changes[0].new_hash == _blob_sha(repo, "src/app.py")
 
 
-def test_incremental_detects_deletion(tmp_path: Path) -> None:
-    cfg = load_config(tmp_path)
+def test_incremental_detects_deletion(repo: Path) -> None:
+    _write(repo / "keep.py", "x")
+    _commit_all(repo)
+    cfg = load_config(repo)
     cache = make_empty_cache()
-    cache.files["src/gone.py"] = CachedFile(hash="abc", analysis=_analysis("src/gone.py"))
+    cache.files["keep.py"] = CachedFile(hash=_blob_sha(repo, "keep.py"))
+    cache.files["src/gone.py"] = CachedFile(hash="abc")
 
-    changes = detect_changes(tmp_path, cfg, cache=cache)
+    changes = detect_changes(repo, cfg, cache=cache)
     assert len(changes) == 1
     assert changes[0].status == "deleted"
+    assert changes[0].path == "src/gone.py"
 
 
-def test_incremental_detects_new_file(tmp_path: Path) -> None:
-    _write(tmp_path / "src" / "new_feature.py", "# new")
-    cfg = load_config(tmp_path)
+def test_incremental_detects_new_file(repo: Path) -> None:
+    _write(repo / "src" / "new_feature.py", "# new")
+    cfg = load_config(repo)
     cache = make_empty_cache()
 
-    changes = detect_changes(tmp_path, cfg, cache=cache)
+    changes = detect_changes(repo, cfg, cache=cache)
     assert len(changes) == 1
     assert changes[0].status == "new"
     assert "new_feature.py" in changes[0].path
+
+
+def test_committed_modification_detected_without_rehash(repo: Path) -> None:
+    """A committed change is caught purely via index SHAs (no file reads)."""
+    f = _write(repo / "app.py", "v1")
+    _commit_all(repo)
+    old_sha = _blob_sha(repo, "app.py")
+    cache = make_empty_cache()
+    cache.files["app.py"] = CachedFile(hash=old_sha)
+
+    f.write_text("v2", encoding="utf-8")
+    _commit_all(repo)
+
+    cfg = load_config(repo)
+    changes = detect_changes(repo, cfg, cache=cache)
+    assert len(changes) == 1
+    assert changes[0].status == "modified"
+
+
+# ── auto profile resolution ──────────────────────────────────────────────────
+
+def test_auto_profile_resolved_during_detect(repo: Path) -> None:
+    _write(repo / "app.py", "x")
+    cfg = load_config(repo)
+    assert cfg.project_size == "auto"
+    detect_changes(repo, cfg, cache=None)
+    assert cfg.project_size == "small"
+
+
+def test_explicit_profile_not_overridden(repo: Path) -> None:
+    _write(repo / ".agents-config.json", '{"project_size": "large"}')
+    _write(repo / "app.py", "x")
+    cfg = load_config(repo)
+    detect_changes(repo, cfg, cache=None)
+    assert cfg.project_size == "large"

@@ -1,75 +1,133 @@
-"""ChangeDetector: detects new/modified/deleted files since last scan."""
+"""ChangeDetector: git-based detection of new/modified/deleted files since last scan.
+
+Git is the source of truth: file identity comes from git blob SHAs (index for
+clean files, `git hash-object` for dirty ones), so an incremental scan costs a
+couple of git subprocess calls plus reads of only the files that actually
+changed — never a full re-hash of the repository.
+"""
 
 import fnmatch
-import hashlib
 import logging
-import os
 import subprocess
 from pathlib import Path
 
 from .cache import CacheData
 from .config import ProjectConfig
-from .gitignore import is_gitignored, load_gitignore_spec
 from .models import FileChange
-from .path_utils import normalize_path, prune_dirnames, rel_posix
+from .path_utils import normalize_path
 
 logger = logging.getLogger(__name__)
 
 
-def _hash_file(path: Path) -> str:
-    """Return SHA-256 hex digest of file contents."""
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
+class NotAGitRepositoryError(RuntimeError):
+    """Raised when the project path is not inside a git repository."""
 
 
-def _git_ls_files(project_path: Path) -> list[str] | None:
-    """Return list of git-tracked file paths (relative, forward-slash). None if not a git repo."""
+_NOT_A_REPO_MSG = (
+    "is not a git repository. agents-md-generator relies on git for change "
+    "detection — run 'git init' in the project root (and commit your code) first."
+)
+
+
+def _run_git(project_path: Path, args: list[str], input_text: str | None = None) -> str | None:
+    """Run a git command; return stdout, or None on failure / missing git."""
     try:
         result = subprocess.run(
-            ["git", "ls-files"],
+            ["git", *args],
             cwd=str(project_path),
             capture_output=True,
             text=True,
-            timeout=30,
+            input=input_text,
+            timeout=120,
         )
-        if result.returncode == 0:
-            return [normalize_path(p) for p in result.stdout.splitlines() if p]
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return None
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
-def _fs_walk(
-    project_path: Path,
-    gitignore_spec=None,
-    config: ProjectConfig | None = None,
-) -> list[str]:
-    """Fallback: walk filesystem when not a git repo, respecting .gitignore.
+def _git_index_hashes(root: Path) -> dict[str, str] | None:
+    """Tracked files with their index blob SHAs — one git call, zero file reads."""
+    out = _run_git(root, ["ls-files", "-s", "-z"])
+    if out is None:
+        return None
+    hashes: dict[str, str] = {}
+    for entry in out.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        fields = meta.split()
+        # "<mode> <sha> <stage>" — skip gitlinks (submodules, mode 160000)
+        if len(fields) != 3 or fields[0] == "160000":
+            continue
+        hashes[normalize_path(path)] = fields[1]
+    return hashes
 
-    When *config* is provided, excluded directories are pruned before descent —
-    their files would be dropped by `_filter_paths` anyway, so skipping the
-    subtree is equivalent and avoids enumerating dependency trees.
+
+def _git_worktree_overrides(root: Path) -> tuple[list[str], set[str]]:
+    """Parse `git status` into (paths needing a fresh hash, worktree-deleted paths)."""
+    out = _run_git(root, ["status", "--porcelain", "-uall", "-z"])
+    if out is None:
+        return [], set()
+    dirty: list[str] = []
+    deleted: set[str] = set()
+    tokens = out.split("\0")
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status, path = entry[:2], normalize_path(entry[3:])
+        # Rename/copy entries carry the original path as the next NUL token
+        if status[0] in "RC":
+            i += 1
+        if status == "??" or status[1] in "MA":
+            dirty.append(path)
+        elif status[1] == "D":
+            deleted.add(path)
+    return dirty, deleted
+
+
+def _git_blob_hashes(root: Path, paths: list[str]) -> dict[str, str]:
+    """Batch-hash working-tree files with one `git hash-object` subprocess."""
+    if not paths:
+        return {}
+    out = _run_git(root, ["hash-object", "--stdin-paths"], input_text="\n".join(paths) + "\n")
+    if out is None:
+        logger.warning("git hash-object failed; dirty files keep their index hash")
+        return {}
+    return dict(zip(paths, out.split()))
+
+
+def git_file_hashes(root: Path) -> dict[str, str] | None:
+    """Current content hash for every file git would scan (tracked + untracked).
+
+    Clean files use their index blob SHA; dirty/untracked files are hashed via
+    a single batched `git hash-object`. Returns None if not a git repo.
     """
-    files = []
-    for dirpath, dirnames, filenames in os.walk(project_path):
-        rel_dir = rel_posix(Path(dirpath), project_path)
-        dirnames.sort()
-        filenames.sort()
-        if config is not None:
-            prune_dirnames(
-                dirnames, rel_dir, config._exclude_dir_tokens, config._exclude_globs
-            )
-        for name in filenames:
-            rel = f"{rel_dir}/{name}" if rel_dir != "." else name
-            if gitignore_spec and is_gitignored(rel, gitignore_spec):
-                continue
-            # os.walk filenames include FIFOs, sockets, and broken symlinks;
-            # hashing a FIFO would block forever waiting for a writer.
-            if not (Path(dirpath) / name).is_file():
-                continue
-            files.append(rel)
-    return files
+    hashes = _git_index_hashes(root)
+    if hashes is None:
+        return None
+    dirty, deleted = _git_worktree_overrides(root)
+    for path in deleted:
+        hashes.pop(path, None)
+    # hash-object fails the whole batch on a vanished path — filter first
+    dirty_existing = [p for p in dirty if (root / p).is_file()]
+    hashes.update(_git_blob_hashes(root, dirty_existing))
+    return hashes
+
+
+def git_list_all_files(root: Path) -> list[str] | None:
+    """All project files (tracked + untracked, gitignore respected), any extension.
+
+    Used by the structure scanners. Returns None if not a git repo.
+    """
+    out = _run_git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+    if out is None:
+        return None
+    return [normalize_path(p) for p in out.split("\0") if p]
 
 
 def _is_excluded(path: str, config: ProjectConfig) -> bool:
@@ -117,22 +175,15 @@ def _is_included(path: str, config: ProjectConfig) -> bool:
     return any(fnmatch.fnmatch(path, p) for p in config.include)
 
 
-def _filter_paths(
-    paths: list[str],
-    config: ProjectConfig,
-    gitignore_spec=None,
-) -> list[str]:
-    """Apply gitignore, exclude/include filters, and extension check."""
+def _filter_paths(paths: list[str], config: ProjectConfig) -> list[str]:
+    """Apply exclude/include filters and extension check."""
     result = []
     for p in paths:
-        if gitignore_spec and is_gitignored(p, gitignore_spec):
-            continue
         if _is_excluded(p, config):
             continue
         if not _is_included(p, config):
             continue
-        ext = Path(p).suffix
-        if not config.is_extension_supported(ext):
+        if not config.is_extension_supported(Path(p).suffix):
             continue
         result.append(p)
     return result
@@ -151,105 +202,49 @@ def detect_changes(
     cache: CacheData | None,
 ) -> list[FileChange]:
     """
-    Detect which files changed since the last scan.
+    Detect which files changed since the last scan, using git as source of truth.
 
-    Cold start (no cache): all tracked files → status "new".
-    Incremental (cache exists): hash-compare each file.
+    Cold start (no cache): all files → status "new".
+    Incremental (cache exists): compare git content hashes against the cache —
+    only changed files are ever stat'ed or read.
 
-    For git repos, uses git ls-files (already respects .gitignore).
-    For non-git repos, parses .gitignore via pathspec.
+    Raises NotAGitRepositoryError when the project is not a git repository.
     """
     root = Path(project_path).resolve()
 
-    raw_files = _git_ls_files(root)
-    is_git_repo = raw_files is not None
+    hashes = git_file_hashes(root)
+    if hashes is None:
+        raise NotAGitRepositoryError(f"'{root}' {_NOT_A_REPO_MSG}")
 
-    if is_git_repo:
-        # git ls-files already respects .gitignore — no need to parse it ourselves
-        gitignore_spec = None
-    else:
-        logger.warning("Not a git repo, falling back to filesystem walk")
-        gitignore_spec = load_gitignore_spec(root, config)
-        raw_files = _fs_walk(root, gitignore_spec, config)
+    scannable = set(_filter_paths(list(hashes), config))
+    current = {p: h for p, h in hashes.items() if p in scannable}
 
-    filtered = _filter_paths(raw_files, config, gitignore_spec)
+    # Auto profile resolution: this is the first (and only) point in the
+    # pipeline where the supported-file count of the whole project is known.
+    config.resolve_profile(len(current))
 
-    if cache is None:
-        return _cold_start(root, filtered, config)
-    return _incremental(root, filtered, config, cache)
-
-
-def _cold_start(
-    root: Path,
-    filtered_paths: list[str],
-    config: ProjectConfig,
-) -> list[FileChange]:
-    changes = []
-    for rel in filtered_paths:
-        abs_path = root / rel
-        if not abs_path.exists():
-            continue
-        if _is_too_large(abs_path, config):
-            logger.warning("Skipping large file: %s", rel)
-            continue
-        try:
-            new_hash = _hash_file(abs_path)
-        except OSError as exc:
-            logger.warning("Cannot read %s: %s", rel, exc)
-            continue
-        changes.append(FileChange(path=rel, status="new", new_hash=new_hash))
-    return changes
-
-
-def _incremental(
-    root: Path,
-    filtered_paths: list[str],
-    config: ProjectConfig,
-    cache: CacheData,
-) -> list[FileChange]:
+    cached_files = cache.files if cache is not None else {}
     changes: list[FileChange] = []
-    current_set = set(filtered_paths)
-    cached_set = set(cache.files.keys())
 
-    # Modified or deleted
-    for rel, cached_file in cache.files.items():
-        abs_path = root / rel
-        if not abs_path.exists():
-            changes.append(FileChange(
-                path=rel,
-                status="deleted",
-                old_hash=cached_file.hash,
-            ))
+    for rel in sorted(cached_files):
+        cached_file = cached_files[rel]
+        if rel not in current:
+            changes.append(FileChange(path=rel, status="deleted", old_hash=cached_file.hash))
             continue
-        if _is_too_large(abs_path, config):
+        if current[rel] == cached_file.hash:
+            continue
+        if _is_too_large(root / rel, config):
             logger.warning("Skipping large file: %s", rel)
             continue
-        try:
-            new_hash = _hash_file(abs_path)
-        except OSError as exc:
-            logger.warning("Cannot read %s: %s", rel, exc)
-            continue
-        if new_hash != cached_file.hash:
-            changes.append(FileChange(
-                path=rel,
-                status="modified",
-                old_hash=cached_file.hash,
-                new_hash=new_hash,
-            ))
+        changes.append(FileChange(
+            path=rel, status="modified",
+            old_hash=cached_file.hash, new_hash=current[rel],
+        ))
 
-    # New files not in cache
-    for rel in current_set - cached_set:
-        abs_path = root / rel
-        if not abs_path.exists():
-            continue
-        if _is_too_large(abs_path, config):
+    for rel in sorted(current.keys() - cached_files.keys()):
+        if _is_too_large(root / rel, config):
             logger.warning("Skipping large file: %s", rel)
             continue
-        try:
-            new_hash = _hash_file(abs_path)
-        except OSError as exc:
-            logger.warning("Cannot read %s: %s", rel, exc)
-            continue
-        changes.append(FileChange(path=rel, status="new", new_hash=new_hash))
+        changes.append(FileChange(path=rel, status="new", new_hash=current[rel]))
 
     return changes

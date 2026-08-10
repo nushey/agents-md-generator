@@ -3,10 +3,13 @@ from pathlib import Path
 from agents_md_mcp.project_scanner import _scan_project_structure
 from agents_md_mcp.config import ProjectConfig, DEFAULT_CONFIG
 
+from tests.conftest import git_init
+
 def test_boilerplate_directory_flag(tmp_path):
     # Setup project with a boilerplate directory
     root = tmp_path / "myproj"
     root.mkdir()
+    git_init(root)
     migrations = root / "Migrations"
     migrations.mkdir()
     (migrations / "001_initial.cs").write_text("// dummy")

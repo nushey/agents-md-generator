@@ -14,6 +14,8 @@ from agents_md_mcp.project_scanner import _detect_wiring, _cap_routes, _scan_pro
 from agents_md_mcp.symbol_utils import _passes_threshold
 from agents_md_mcp.models import CachedFile, FileAnalysis, FileChange, SymbolInfo
 
+from tests.conftest import git_init
+
 _MEDIUM = SIZE_PROFILES["medium"]
 
 
@@ -239,6 +241,7 @@ go 1.21
 # ── _scan_project_structure ───────────────────────────────────────────────────
 
 def test_scans_root_files(tmp_path: Path) -> None:
+    git_init(tmp_path)
     _write(tmp_path / "README.md")
     _write(tmp_path / "main.py")
     cfg = load_config(tmp_path)
@@ -247,6 +250,7 @@ def test_scans_root_files(tmp_path: Path) -> None:
 
 
 def test_detects_ci_files(tmp_path: Path) -> None:
+    git_init(tmp_path)
     ci_file = tmp_path / ".github" / "workflows" / "ci.yml"
     _write(ci_file, "name: CI\n")
     cfg = load_config(tmp_path)
@@ -255,6 +259,7 @@ def test_detects_ci_files(tmp_path: Path) -> None:
 
 
 def test_detects_test_directories(tmp_path: Path) -> None:
+    git_init(tmp_path)
     (tmp_path / "tests").mkdir()
     cfg = load_config(tmp_path)
     result = _scan_project_structure(tmp_path, cfg)
@@ -262,6 +267,7 @@ def test_detects_test_directories(tmp_path: Path) -> None:
 
 
 def test_directory_language_detection(tmp_path: Path) -> None:
+    git_init(tmp_path)
     _write(tmp_path / "src" / "app.py", "# python")
     _write(tmp_path / "src" / "utils.py", "# python")
     cfg = load_config(tmp_path)
@@ -274,6 +280,7 @@ def test_directory_language_detection(tmp_path: Path) -> None:
 # ── build_payload ─────────────────────────────────────────────────────────────
 
 def test_build_payload_new_files(tmp_path: Path) -> None:
+    git_init(tmp_path)
     _write(tmp_path / "src" / "app.py", "class App:\n  def run(self): pass")
     cfg = load_config(tmp_path)
 
@@ -290,6 +297,7 @@ def test_build_payload_new_files(tmp_path: Path) -> None:
 
 
 def test_build_payload_does_not_include_agents_md_fields(tmp_path: Path) -> None:
+    git_init(tmp_path)
     cfg = load_config(tmp_path)
     payload = build_payload(tmp_path, cfg, [], {}, cache=None)
     assert "instructions" not in payload
@@ -297,6 +305,7 @@ def test_build_payload_does_not_include_agents_md_fields(tmp_path: Path) -> None
 
 
 def test_build_payload_modified_with_diff(tmp_path: Path) -> None:
+    git_init(tmp_path)
     _write(tmp_path / "src" / "app.py", "def run(): pass\ndef stop(): pass")
     cfg = load_config(tmp_path)
 
@@ -325,6 +334,7 @@ def test_build_payload_modified_with_diff(tmp_path: Path) -> None:
 
 
 def test_build_payload_deleted_file(tmp_path: Path) -> None:
+    git_init(tmp_path)
     cfg = load_config(tmp_path)
     changes = [FileChange(path="src/old.py", status="deleted", old_hash="abc")]
     payload = build_payload(tmp_path, cfg, changes, {}, cache=None)

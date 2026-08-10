@@ -1,14 +1,17 @@
 """Filesystem scanners: project structure, env vars, and entry points."""
 
-import os
 import re
 from pathlib import Path
 
-from .change_detector import _is_excluded
+from .change_detector import (
+    _NOT_A_REPO_MSG,
+    NotAGitRepositoryError,
+    _is_excluded,
+    git_list_all_files,
+)
 from .config import EXTENSION_TO_LANGUAGE, ProjectConfig, SizeProfile
-from .gitignore import is_gitignored, load_gitignore_spec
-from .models import FileAnalysis
-from .path_utils import prune_dirnames, rel_posix
+from .models import FileAnalysis, FileChange
+from .path_utils import rel_posix
 from .symbol_utils import _is_test_file
 
 # ── Project structure ─────────────────────────────────────────────────────────
@@ -62,37 +65,26 @@ _BOILERPLATE_DIR_NAMES = {
 
 
 def _walk_files(root: Path, config: ProjectConfig) -> list[tuple[Path, str]]:
-    """Traverse the project tree exactly once, applying gitignore + exclude filters.
+    """List project files via git instead of walking the filesystem.
 
-    Shared by `_scan_project_structure`, `_detect_env_vars`, and
-    `_detect_entry_points` so a single `build_payload` walks the filesystem once
-    instead of three times, and loads the .gitignore spec once instead of
-    per-consumer. Returns (absolute_path, relative_posix_path) pairs.
-
-    Excluded directories (node_modules, bin/obj, .venv, …) are pruned before
-    descent, so their contents are never enumerated. Gitignore filtering stays
-    per-file: negation patterns can re-include files under an ignored directory.
-
-    Traversal order is canonical (lexicographic, top-down) — deterministic
-    across platforms, unlike the OS-dependent rglob order it replaced.
+    Shared by `_scan_project_structure` and `_detect_entry_points` so a single
+    `build_payload` lists files once. Returns (absolute_path, relative_posix_path)
+    pairs, sorted for deterministic output. Git already honors .gitignore, so no
+    pathspec matching is needed; config excludes still apply (vendored trees can
+    be committed).
     """
-    gitignore_spec = load_gitignore_spec(root, config)
+    rels = git_list_all_files(root)
+    if rels is None:
+        raise NotAGitRepositoryError(f"'{root}' {_NOT_A_REPO_MSG}")
     files: list[tuple[Path, str]] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        rel_dir = rel_posix(Path(dirpath), root)
-        dirnames.sort()
-        filenames.sort()
-        prune_dirnames(dirnames, rel_dir, config._exclude_dir_tokens, config._exclude_globs)
-        for name in filenames:
-            rel = f"{rel_dir}/{name}" if rel_dir != "." else name
-            if _is_excluded(rel, config):
-                continue
-            if is_gitignored(rel, gitignore_spec):
-                continue
-            item = Path(dirpath) / name
-            if not item.is_file():
-                continue
-            files.append((item, rel))
+    for rel in sorted(rels):
+        if _is_excluded(rel, config):
+            continue
+        item = root / rel
+        # ls-files also reports worktree-deleted entries; skip anything unreadable
+        if not item.is_file():
+            continue
+        files.append((item, rel))
     return files
 
 
@@ -157,15 +149,15 @@ def _scan_project_structure(
         for d in root.glob(pattern):
             if d.is_dir():
                 test_dirs.append(rel_posix(d, root) + "/")
-        # Also *.Tests style (case insensitive check)
-        for d in root.glob("*"):
-            if d.is_dir() and any(
-                d.name.lower().endswith(suf)
-                for suf in (".tests", ".test", ".specs", ".spec")
-            ):
-                rel = rel_posix(d, root) + "/"
-                if rel not in test_dirs:
-                    test_dirs.append(rel)
+    # Also *.Tests style (case insensitive check)
+    for d in root.glob("*"):
+        if d.is_dir() and any(
+            d.name.lower().endswith(suf)
+            for suf in (".tests", ".test", ".specs", ".spec")
+        ):
+            rel = rel_posix(d, root) + "/"
+            if rel not in test_dirs:
+                test_dirs.append(rel)
 
     # Top-level projects: directories with no nested path separator.
     # e.g. "Zureo.Common/" is top-level; "Zureo.Common/Entities/" is not.
@@ -211,36 +203,53 @@ _ENV_GUARDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _detect_env_vars(
-    root: Path, config: ProjectConfig, files: list[tuple[Path, str]] | None = None,
-) -> list[str]:
-    """Scan source files and .env examples for environment variable names."""
-    if files is None:
-        files = _walk_files(root, config)
+def _scan_file_env_vars(item: Path, lang: str, config: ProjectConfig) -> set[str]:
+    """Extract env var names referenced in a single source file."""
+    pattern = _ENV_PATTERNS.get(lang)
+    if pattern is None:
+        return set()
     found: set[str] = set()
-
-    # Scan source files for process.env.X / os.environ / etc.
-    for item, _rel in files:
-        lang = EXTENSION_TO_LANGUAGE.get(item.suffix.lower())
-        pattern = _ENV_PATTERNS.get(lang) if lang else None
-        if pattern is None:
-            continue
+    try:
         if item.stat().st_size > config.max_file_size_bytes:
-            continue
-        try:
-            content = item.read_text(encoding="utf-8", errors="replace")
-            guards = _ENV_GUARDS.get(lang)
-            if guards and not any(g in content for g in guards):
-                continue
-            for match in pattern.finditer(content):
-                # rust pattern has two groups; take whichever matched
-                var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)
-                if var:
-                    found.add(var)
-        except OSError:
-            continue
+            return set()
+        content = item.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    guards = _ENV_GUARDS.get(lang)
+    if guards and not any(g in content for g in guards):
+        return set()
+    for match in pattern.finditer(content):
+        # rust pattern has two groups; take whichever matched
+        var = next((g for g in match.groups() if g), None) if match.lastindex and match.lastindex > 1 else match.group(1)
+        if var:
+            found.add(var)
+    return found
 
-    # Scan .env example files at root — most reliable source of truth
+
+def detect_env_vars_for_changes(
+    root: Path, config: ProjectConfig, changes: list[FileChange],
+) -> dict[str, list[str]]:
+    """Scan ONLY changed files for env var references — path → sorted var names.
+
+    Unchanged files contribute their cached env_vars instead (merged by the
+    caller), so incremental scans never re-read the whole codebase.
+    """
+    env_map: dict[str, list[str]] = {}
+    for change in changes:
+        if change.status == "deleted":
+            continue
+        lang = EXTENSION_TO_LANGUAGE.get(Path(change.path).suffix.lower())
+        if lang is None:
+            continue
+        found = _scan_file_env_vars(root / change.path, lang, config)
+        if found:
+            env_map[change.path] = sorted(found)
+    return env_map
+
+
+def detect_root_env_vars(root: Path) -> set[str]:
+    """Scan .env example files at root — most reliable source of truth."""
+    found: set[str] = set()
     for name in _ENV_DOTFILES:
         env_file = root / name
         if not env_file.exists():
@@ -252,8 +261,7 @@ def _detect_env_vars(
                     found.add(m.group(1))
         except OSError:
             continue
-
-    return sorted(found)
+    return found
 
 
 # ── Entry point detection ─────────────────────────────────────────────────────

@@ -26,6 +26,9 @@ VERSION=$(grep '^version = ' "$SCRIPT_DIR/pyproject.toml" | head -1 | sed 's/ver
 echo "Version: $VERSION"
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" "$SCRIPT_DIR/server.json"
 
+# Keep uv.lock in sync with the bumped version (CI runs uv sync --locked)
+uv lock
+
 # Clean old dist
 echo "Removing old dist..."
 rm -rf "$SCRIPT_DIR/dist"
@@ -48,7 +51,7 @@ mcp-publisher publish
 
 # Git: stage version files, commit, push dev, merge into main
 echo "Committing version bump..."
-git -C "$SCRIPT_DIR" add pyproject.toml server.json
+git -C "$SCRIPT_DIR" add pyproject.toml server.json uv.lock
 git -C "$SCRIPT_DIR" commit -m "chore: bump to version $VERSION"
 
 echo "Pushing to dev..."

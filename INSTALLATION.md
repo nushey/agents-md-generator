@@ -24,6 +24,16 @@ sudo dnf install python3
 sudo pacman -S python
 ```
 
+**macOS**
+
+```bash
+# Verify current version
+python3 --version
+
+# Homebrew
+brew install python
+```
+
 **Windows**
 
 Download and run the installer from [python.org/downloads](https://www.python.org/downloads/). During installation, check **"Add Python to PATH"**.
@@ -49,6 +59,16 @@ sudo dnf install git
 
 # Arch
 sudo pacman -S git
+```
+
+**macOS**
+
+```bash
+# Xcode Command Line Tools (includes git)
+xcode-select --install
+
+# or Homebrew
+brew install git
 ```
 
 **Windows**
@@ -115,15 +135,21 @@ Then configure your client manually:
 ### Claude Code
 
 ```bash
-claude mcp add agents-md uvx agents-md-generator
+claude mcp add agents-md -- uvx agents-md-generator
+```
+
+`claude mcp add` defaults to `--scope local` (current project only). For all projects, add `-s user`:
+
+```bash
+claude mcp add agents-md -s user -- uvx agents-md-generator
 ```
 
 Or add manually to your config file:
 
-| Platform | Path |
-|----------|------|
-| Linux / macOS | `~/.claude.json` |
-| Windows | `%USERPROFILE%\.claude.json` |
+| Scope | Path |
+|-------|------|
+| Global (all projects) | `~/.claude.json` — Windows: `%USERPROFILE%\.claude.json` |
+| Project-scoped | `.mcp.json` in the project root |
 
 ```json
 {
@@ -198,7 +224,8 @@ Add to `~/.codex/config.toml` (global) or `.codex/config.toml` in your project r
 
 ```toml
 [mcp_servers.agents-md]
-command = "agents-md-generator"
+command = "uvx"
+args = ["agents-md-generator"]
 ```
 
 ---
@@ -219,7 +246,7 @@ The client should call `generate_agents_md` automatically. If the tool does not 
 
 1. Restart your client completely after any config change
 2. Verify the config file is valid — no trailing commas or incorrect quotes in JSON; valid TOML syntax for Codex
-3. For Option A: confirm `agents-md-generator --version` works in your terminal
+3. For Option A: confirm `pip show agents-md-generator` reports the installed version
 4. For Option B: confirm `uvx --version` works in your terminal
 5. Check the MCP panel or logs in your client for server errors
 
@@ -249,6 +276,8 @@ Each project gets its own subdirectory identified by a hash of its absolute path
 
 The package is not installed or not on your PATH. Run `pip install agents-md-generator` and restart your terminal.
 
+> Do not run `agents-md-generator` with no arguments to test it — with no subcommand it starts the MCP server on stdio and waits for input, which looks like a hang. Use `pip show agents-md-generator` to confirm the install, or `agents-md-generator setup` to run the wizard.
+
 ### `uvx: command not found`
 
 uv is not installed or not on your PATH. Run the install command in [Option B](#option-b--uvx-no-install-needed) and restart your terminal.
@@ -257,7 +286,7 @@ uv is not installed or not on your PATH. Run the install command in [Option B](#
 
 - Restart your client completely after any config change
 - Confirm the config file is valid — no trailing commas or incorrect quotes in JSON; valid TOML syntax for Codex
-- Run `agents-md-generator --version` (Option A) or `uvx --version` (Option B) to confirm the binary is accessible
+- Run `pip show agents-md-generator` (Option A) or `uvx --version` (Option B) to confirm the package is accessible
 - Check your client's MCP panel or logs for server errors
 
 ### Cache is stale after moving the project directory

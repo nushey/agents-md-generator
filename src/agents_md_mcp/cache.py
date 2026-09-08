@@ -56,10 +56,12 @@ def save_cache(project_path: str | Path, data: CacheData) -> None:
         # is re-added explicitly — load_cache rejects caches without it.
         payload = data.model_dump(mode="json", exclude_defaults=True)
         payload["version"] = data.version
-        cache_path.write_text(
+        temporary_path = cache_path.with_suffix(".tmp")
+        temporary_path.write_text(
             json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
             encoding="utf-8",
         )
+        temporary_path.replace(cache_path)
         logger.debug("Cache saved to %s", cache_path)
     except OSError as exc:
         logger.error("Could not write cache to %s: %s", cache_path, exc)

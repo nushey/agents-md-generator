@@ -46,7 +46,7 @@ def _is_test_file(path: str) -> bool:
 # ── Symbol formatting ─────────────────────────────────────────────────────────
 
 def _slim_symbol(sym) -> dict:
-    """Return only the fields the AI needs — no line numbers, no parent."""
+    """Return the symbol's identity and architectural attributes."""
     out = {
         "name": sym.name,
         "kind": sym.kind,
@@ -55,6 +55,10 @@ def _slim_symbol(sym) -> dict:
     }
     if sym.decorators:
         out["decorators"] = sym.decorators
+    if sym.parent:
+        out["parent"] = sym.parent
+    if sym.implements:
+        out["implements"] = sym.implements
     return out
 
 

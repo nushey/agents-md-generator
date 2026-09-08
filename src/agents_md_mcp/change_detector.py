@@ -7,6 +7,7 @@ changed — never a full re-hash of the repository.
 """
 
 import fnmatch
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -23,6 +24,10 @@ class NotAGitRepositoryError(RuntimeError):
     """Raised when the project path is not inside a git repository."""
 
 
+class GitCommandError(RuntimeError):
+    pass
+
+
 _NOT_A_REPO_MSG = (
     "is not a git repository. agents-md-generator relies on git for change "
     "detection — run 'git init' in the project root (and commit your code) first."
@@ -30,7 +35,7 @@ _NOT_A_REPO_MSG = (
 
 
 def _run_git(project_path: Path, args: list[str], input_text: str | None = None) -> str | None:
-    """Run a git command; return stdout, or None on failure / missing git."""
+    """Return stdout, or None outside a repository; raise on command failure."""
     try:
         result = subprocess.run(
             ["git", *args],
@@ -40,10 +45,12 @@ def _run_git(project_path: Path, args: list[str], input_text: str | None = None)
             input=input_text,
             timeout=120,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise GitCommandError(f"git {args[0]} failed: {exc}") from exc
     if result.returncode != 0:
-        return None
+        if "not a git repository" in result.stderr.lower():
+            return None
+        raise GitCommandError(f"git {args[0]} failed: {result.stderr.strip()}")
     return result.stdout
 
 
@@ -69,7 +76,7 @@ def _git_worktree_overrides(root: Path) -> tuple[list[str], set[str]]:
     """Parse `git status` into (paths needing a fresh hash, worktree-deleted paths)."""
     out = _run_git(root, ["status", "--porcelain", "-uall", "-z"])
     if out is None:
-        return [], set()
+        raise GitCommandError("git status failed; change detection is incomplete")
     dirty: list[str] = []
     deleted: set[str] = set()
     tokens = out.split("\0")
@@ -94,14 +101,17 @@ def _git_blob_hashes(root: Path, paths: list[str]) -> dict[str, str]:
     """Batch-hash working-tree files with one `git hash-object` subprocess."""
     if not paths:
         return {}
-    out = _run_git(root, ["hash-object", "--stdin-paths"], input_text="\n".join(paths) + "\n")
+    input_text = "\n".join(json.dumps(p, ensure_ascii=False) for p in paths) + "\n"
+    out = _run_git(root, ["hash-object", "--stdin-paths"], input_text=input_text)
     if out is None:
-        logger.warning("git hash-object failed; dirty files keep their index hash")
-        return {}
-    return dict(zip(paths, out.split()))
+        raise GitCommandError("git hash-object failed; change detection is incomplete")
+    hashes = out.split()
+    if len(hashes) != len(paths):
+        raise GitCommandError("git hash-object returned an incomplete batch")
+    return dict(zip(paths, hashes))
 
 
-def git_file_hashes(root: Path) -> dict[str, str] | None:
+def git_file_hashes(root: Path, config: ProjectConfig | None = None) -> dict[str, str] | None:
     """Current content hash for every file git would scan (tracked + untracked).
 
     Clean files use their index blob SHA; dirty/untracked files are hashed via
@@ -111,10 +121,18 @@ def git_file_hashes(root: Path) -> dict[str, str] | None:
     if hashes is None:
         return None
     dirty, deleted = _git_worktree_overrides(root)
+    if config is not None:
+        hashes = {p: hashes[p] for p in _filter_paths(list(hashes), config)}
+        dirty = _filter_paths(dirty, config)
     for path in deleted:
         hashes.pop(path, None)
     # hash-object fails the whole batch on a vanished path — filter first
     dirty_existing = [p for p in dirty if (root / p).is_file()]
+    if config is not None:
+        oversized = {p for p in dirty_existing if _is_too_large(root / p, config)}
+        dirty_existing = [p for p in dirty_existing if p not in oversized]
+        for path in oversized:
+            hashes.pop(path, None)
     hashes.update(_git_blob_hashes(root, dirty_existing))
     return hashes
 
@@ -212,7 +230,7 @@ def detect_changes(
     """
     root = Path(project_path).resolve()
 
-    hashes = git_file_hashes(root)
+    hashes = git_file_hashes(root, config)
     if hashes is None:
         raise NotAGitRepositoryError(f"'{root}' {_NOT_A_REPO_MSG}")
 

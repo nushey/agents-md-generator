@@ -48,9 +48,9 @@ def _merged_analyses(
     merged: dict = dict(new_analyses)
     if cache is None:
         return merged
-    deleted = {c.path for c in changes if c.status == "deleted"}
+    changed = {c.path for c in changes}
     for path, cached_file in cache.files.items():
-        if path in merged or path in deleted or not cached_file.symbols:
+        if path in merged or path in changed or not cached_file.symbols:
             continue
         lang = EXTENSION_TO_LANGUAGE.get(Path(path).suffix.lower())
         if lang:
@@ -84,9 +84,9 @@ def _build_interface_impl_map(analyses: dict) -> dict[str, list[str]]:
         if analysis.language != "go":
             continue
         struct_names = {s.name for s in analysis.symbols if s.kind == "struct"}
-        for iface in all_interfaces:
-            if iface.startswith("I") and iface[1:] in struct_names:
-                impl = iface[1:]
+        for impl in sorted(struct_names):
+            iface = f"I{impl}"
+            if iface in all_interfaces:
                 if impl not in impl_map.get(iface, []):
                     impl_map.setdefault(iface, []).append(impl)
 
@@ -156,6 +156,7 @@ def build_payload(
     scan_type: str = "full",
     include_agents_md_context: bool = False,
     env_vars: list[str] | None = None,
+    walked_files: list[tuple[Path, str]] | None = None,
 ) -> dict:
     """
     Assemble the complete JSON payload to return from the MCP tool.
@@ -175,7 +176,8 @@ def build_payload(
     project_name = root.name
 
     # Single filesystem traversal shared by all structure scanners below.
-    walked_files = _walk_files(root, config)
+    if walked_files is None:
+        walked_files = _walk_files(root, config)
     structure = _scan_project_structure(root, config, walked_files)
     build_system = _detect_build_systems(
         root, [p for p, _rel in walked_files if p.suffix.lower() == ".csproj"]
@@ -223,7 +225,20 @@ def build_payload(
                 # classified twice per symbol).
                 added = [(s, classify_impact(s, "added")) for s in diff.added]
                 removed = [(s, classify_impact(s, "removed")) for s in diff.removed]
-                modified = [(s, classify_impact(s, "modified")) for s in diff.modified]
+                old_impacts = {}
+                for symbol in old_symbols:
+                    key = (symbol.parent, symbol.kind, symbol.name)
+                    old_impacts[key] = min(
+                        old_impacts.get(key, "low"), classify_impact(symbol, "modified"),
+                        key=_THRESHOLD_ORDER.get,
+                    )
+                modified = [
+                    (s, min(
+                        classify_impact(s, "modified"),
+                        old_impacts.get((s.parent, s.kind, s.name), "low"),
+                        key=_THRESHOLD_ORDER.get,
+                    )) for s in diff.modified
+                ]
 
                 filtered_added = [
                     _slim_symbol(s) for s, impact in added
@@ -305,6 +320,7 @@ def build_payload(
         },
     }
     if include_agents_md_context:
+        payload["metadata"]["analysis_scope"] = "complete_snapshot"
         payload["instructions"] = _build_instructions(existing_agents_md is not None)
         # Mode + existing content up front: the agent must know create vs update
         # and have the file to preserve BEFORE it reads any full_analysis chunk.

@@ -1,6 +1,7 @@
 """ASTAnalyzer: orchestrates tree-sitter parsing for all supported languages."""
 
 import logging
+from collections import defaultdict, deque
 from pathlib import Path
 
 from .cache import CacheData
@@ -97,19 +98,40 @@ def diff_analysis(old_symbols: list, new_symbols: list) -> AnalysisDiff:
     Accepts any objects with name/signature/kind/visibility/decorators attributes
     (both SymbolInfo from a fresh analysis and CachedSymbol from cache).
     """
-    old_map = {s.name: s for s in old_symbols}
-    new_map = {s.name: s for s in new_symbols}
+    old_groups = defaultdict(list)
+    new_groups = defaultdict(list)
+    for symbol in old_symbols:
+        old_groups[(symbol.parent, symbol.kind, symbol.name)].append(symbol)
+    for symbol in new_symbols:
+        new_groups[(symbol.parent, symbol.kind, symbol.name)].append(symbol)
 
-    added = [s for name, s in new_map.items() if name not in old_map]
-    removed = [s for name, s in old_map.items() if name not in new_map]
-    modified = [
-        new_map[name]
-        for name in old_map
-        if name in new_map
-        and old_map[name].signature != new_map[name].signature
-    ]
+    added, removed, modified = [], [], []
+    for key in dict.fromkeys([*old_groups, *new_groups]):
+        by_signature = defaultdict(deque)
+        for symbol in old_groups[key]:
+            by_signature[symbol.signature].append(symbol)
+        unmatched_new = []
+        for symbol in new_groups[key]:
+            matches = by_signature[symbol.signature]
+            if not matches:
+                unmatched_new.append(symbol)
+                continue
+            old = matches.popleft()
+            if any(getattr(old, field) != getattr(symbol, field) for field in
+                   ("visibility", "decorators", "implements")):
+                modified.append(symbol)
+        unmatched_old = [symbol for matches in by_signature.values() for symbol in matches]
+        if len(unmatched_old) == len(unmatched_new) == 1:
+            modified.extend(unmatched_new)
+        else:
+            removed.extend(unmatched_old)
+            added.extend(unmatched_new)
 
-    return AnalysisDiff(added=added, removed=removed, modified=modified)
+    return AnalysisDiff(
+        added=[SymbolInfo.model_validate(s.model_dump()) for s in added],
+        removed=[SymbolInfo.model_validate(s.model_dump()) for s in removed],
+        modified=[SymbolInfo.model_validate(s.model_dump()) for s in modified],
+    )
 
 
 _HIGH_IMPACT_DECORATORS = {
@@ -127,14 +149,13 @@ _HIGH_IMPACT_DECORATORS = {
 
 def classify_impact(symbol: SymbolInfo, change_type: str) -> str:
     """Classify a symbol change as 'high', 'medium', or 'low'."""
-    decorator_set = set(symbol.decorators)
+    decorator_set = {d.split("(", 1)[0].strip() for d in symbol.decorators}
 
     # HIGH: HTTP endpoints (any language)
     if decorator_set & _HIGH_IMPACT_DECORATORS:
         return "high"
 
-    # HIGH: Adding/removing a class or interface
-    if change_type in ("added", "removed") and symbol.kind in ("class", "interface", "struct"):
+    if symbol.kind in ("class", "interface", "struct"):
         return "high"
 
     # HIGH: Removing a public method

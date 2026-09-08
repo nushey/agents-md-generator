@@ -96,7 +96,7 @@ El resultado es un `ProjectConfig` con:
 
 ### ¿Hay cache?
 
-Si `force_full_scan = True` → se ignora cualquier cache (cold start forzado). `scan_codebase` default es `True`. `generate_agents_md` siempre usa `False` — si no hay cache, `change_detector` hace cold start igual.
+Si `force_full_scan = True` → se ignora cualquier cache (cold start forzado). `scan_codebase` default es `False`. `generate_agents_md` siempre usa `False` — si no hay cache, `change_detector` hace cold start igual.
 
 Si no → `load_cache(project_path)` intenta leer `~/.cache/agents-md-generator/<project-hash>/cache.json`.
 
@@ -117,7 +117,7 @@ Si la cache existe, `is_cache_valid()` ejecuta `git cat-file -t <base_commit>`. 
 
 ### Filtrar
 
-Cada archivo pasa por: gitignore → exclude patterns → include patterns → extensión soportada. Los que no pasan se ignoran completamente.
+Cada archivo pasa por: gitignore → exclude patterns → include patterns → extensión soportada. Antes de hashear fuentes dirty/untracked se aplican estos filtros y el límite de tamaño. Los errores de Git abortan la detección en lugar de producir resultados parciales.
 
 ### Clasificar cambios
 
@@ -128,7 +128,7 @@ Cada archivo pasa por: gitignore → exclude patterns → include patterns → e
   - Archivos nuevos no en cache → `status="new"`
   - Archivos en cache con mismo hash → **no aparecen, no se tocan**
 
-Si la lista de cambios está vacía → se retorna `{ "status": "no_changes" }` y el pipeline termina acá.
+Si la lista de cambios está vacía, solo `scan_codebase` retorna `{ "status": "no_changes" }`. La generación continúa con símbolos cacheados para poder recuperar una escritura interrumpida de AGENTS.md.
 
 ---
 
@@ -151,6 +151,7 @@ El resultado es `{ path → FileAnalysis }` con todos los símbolos públicos + 
 `build_payload(..., include_agents_md_context)` en `context_builder.py` orquesta los scanners y ensambla el JSON final.
 
 Cuando `include_agents_md_context=True` (solo desde `generate_agents_md`):
+- Combina análisis nuevos con símbolos cacheados en un snapshot actual (`metadata.analysis_scope = "complete_snapshot"`). La lectura de archivos para estructura se reutiliza si el presupuesto obliga a reconstruir el payload.
 - Lee el AGENTS.md existente del disco si lo hay → campo `existing_agents_md`
 - Genera las reglas de escritura via `_build_instructions(has_existing)` → campo `instructions`
 - Ambos campos se insertan en el payload: `instructions` después de `metadata`, `existing_agents_md` al final
@@ -169,7 +170,7 @@ Se construye una nueva cache desde cero:
 2. Se copian desde la cache anterior todas las entradas que **no** cambiaron (paths no en la lista de cambios)
 3. Para cada archivo analizado en este run, se agrega la nueva entrada con el nuevo hash y los símbolos públicos
 4. Para archivos de test, se guarda solo el hash (sin símbolos — no se necesitan para diff futuro)
-5. Se persiste en disco
+5. Se persiste mediante reemplazo atómico después de escribir el payload limitado a presupuesto
 
 ---
 

@@ -13,9 +13,13 @@ generation: it reads the existing file if present, returns writing rules and
 step-by-step orchestration instructions. No large data travels over the MCP wire.
 """
 
+import asyncio
 import json
 import logging
+import multiprocessing
 import os
+import signal
+import subprocess
 import sys
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -34,11 +38,11 @@ from .cache import (
 )
 from .change_detector import NotAGitRepositoryError, detect_changes
 from .config import SIZE_PROFILES, load_config
-from .context_builder import build_payload
-from .project_scanner import detect_env_vars_for_changes, detect_root_env_vars
+from .context_builder import build_payload, _merged_analyses
+from .project_scanner import detect_env_vars_for_changes, detect_root_env_vars, _walk_files
 from .symbol_utils import _is_public, _is_test_file
-from .connectors import setup_connectors, get_connector_spec
-from .models import CachedFile, CachedSymbol, ScanCodebaseInput, ReadPayloadChunkInput, GenerateAgentsMdInput
+from .connectors import setup_connectors
+from .models import CachedFile, CachedSymbol, FileChange, ScanCodebaseInput, ReadPayloadChunkInput, GenerateAgentsMdInput
 
 # Log to stderr only — never stdout (stdio MCP transport uses stdout)
 _log_level = getattr(logging, os.environ.get("AGENTS_MD_LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -55,12 +59,9 @@ PAYLOAD_FILENAME = "payload.json"
 # response comfortably under MCP client tool-result token limits.
 CHUNK_CHARS = 20_000
 
-# Hard ceiling on the serialized payload. Beyond this the consuming agent
-# drowns in chunks regardless of how fast the scan was. When exceeded, the
-# payload is degraded in order: rebuild with the "large" profile → strip method
-# signatures → truncate full_analysis. Each step is recorded in
-# metadata.degradations so the agent knows detail was dropped.
 PAYLOAD_BUDGET_CHARS = 300_000
+SCAN_TIMEOUT_SECONDS = 300
+_active_scans: set[Path] = set()
 
 # The server is long-lived: cache the payload text per path so sequential
 # read_payload_chunk calls slice one in-memory string instead of re-reading the
@@ -99,12 +100,6 @@ def _compute_total_chunks(payload_text: str) -> int:
 
 
 def _enforce_budget(payload, payload_json, dump, config, rebuild):
-    """Degrade an over-budget payload until it fits PAYLOAD_BUDGET_CHARS.
-
-    Ladder: (1) rebuild with the harsher "large" profile, (2) strip method
-    signatures, (3) truncate full_analysis proportionally. Applied steps are
-    recorded in metadata.degradations.
-    """
     degradations: list[str] = []
 
     if config.project_size != "large":
@@ -124,22 +119,28 @@ def _enforce_budget(payload, payload_json, dump, config, rebuild):
         payload_json = dump(payload)
         degradations.append("stripped_method_signatures")
 
-    truncated = 0
-    while len(payload_json) > PAYLOAD_BUDGET_CHARS and payload.get("full_analysis"):
-        entries = payload["full_analysis"]
-        # Keep a proportional slice with 10% margin; re-dump and repeat if needed.
-        keep = max(1, int(len(entries) * PAYLOAD_BUDGET_CHARS / len(payload_json) * 0.9))
-        if keep >= len(entries):
-            break
-        truncated += len(entries) - keep
-        payload["full_analysis"] = entries[:keep]
-        payload_json = dump(payload)
-    if truncated:
-        payload["metadata"]["truncated_entries"] = truncated
-        degradations.append("truncated_full_analysis")
-
     payload["metadata"]["degradations"] = degradations
     payload_json = dump(payload)
+    protected = {"metadata", "instructions", "mode", "existing_agents_md"}
+    while len(payload_json) > PAYLOAD_BUDGET_CHARS:
+        candidates = {
+            key: len(dump(value)) for key, value in payload.items()
+            if key not in protected and isinstance(value, (list, dict)) and value
+        }
+        if not candidates:
+            raise ValueError("AGENTS.md content and instructions exceed the payload budget; existing content cannot be safely truncated")
+        key = max(candidates, key=candidates.get)
+        entries = payload[key]
+        keep = len(entries) // 2
+        payload[key] = entries[:keep] if isinstance(entries, list) else dict(list(entries.items())[:keep])
+        counts = payload["metadata"].setdefault("truncated_sections", {})
+        counts[key] = counts.get(key, 0) + len(entries) - keep
+        degradation = f"truncated_{key}"
+        if degradation not in degradations:
+            degradations.append(degradation)
+        if key == "full_analysis":
+            payload["metadata"]["truncated_entries"] = counts[key]
+        payload_json = dump(payload)
     logger.warning(
         "Payload exceeded budget (%d chars); degradations applied: %s → %d chars",
         PAYLOAD_BUDGET_CHARS, degradations, len(payload_json),
@@ -191,8 +192,7 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     Args:
         params (ScanCodebaseInput): Input parameters containing:
             - project_path (str): Path to the project root (default: ".")
-            - force_full_scan (bool): Ignore cache and rescan everything (default: True).
-              Set to False only when called as part of an incremental update workflow.
+            - force_full_scan (bool): Ignore cache and rescan everything (default: False).
 
     Returns:
         str: JSON with total_chunks and instructions to call read_payload_chunk.
@@ -208,7 +208,7 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
     logger.info("scan_codebase: %s (force_full_scan=%s)", project_path, params.force_full_scan)
 
     try:
-        result = await _run_pipeline(project_path, params.force_full_scan)
+        result = await _run_pipeline(project_path, params.force_full_scan, ctx=ctx)
         return json.dumps(result, indent=2, ensure_ascii=False)
     except NotAGitRepositoryError as exc:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -217,15 +217,98 @@ async def scan_codebase(params: ScanCodebaseInput, ctx: Context) -> str:
         return json.dumps({"error": f"Analysis failed: {type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
 
+def _pipeline_worker(connection, project_path, force_full_scan, include_agents_md_context):
+    if os.name != "nt":
+        os.setsid()
+    try:
+        result = _run_pipeline_sync(
+            project_path, force_full_scan, include_agents_md_context,
+            progress=lambda message: connection.send(("progress", message)),
+        )
+        connection.send(("result", result))
+    except Exception as exc:
+        logger.exception("Scan worker failed for %s", project_path)
+        connection.send(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        connection.close()
+
+
+def _stop_scan(process):
+    if process.is_alive():
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                process.kill()
+    process.join()
+
+
 async def _run_pipeline(
     project_path: Path,
     force_full_scan: bool,
     include_agents_md_context: bool = False,
+    ctx: Context | None = None,
+) -> dict:
+    project_path = project_path.resolve()
+    if project_path in _active_scans:
+        raise RuntimeError("A scan is already running for this project")
+    _active_scans.add(project_path)
+    context = multiprocessing.get_context("spawn")
+    reader, writer = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_pipeline_worker,
+        args=(writer, project_path, force_full_scan, include_agents_md_context),
+        daemon=True,
+    )
+    started = False
+    try:
+        process.start()
+        started = True
+        writer.close()
+        async with asyncio.timeout(SCAN_TIMEOUT_SECONDS):
+            progress = 0
+            while True:
+                if reader.poll():
+                    kind, value = reader.recv()
+                    if kind == "result":
+                        _payload_cache.pop(get_project_cache_dir(project_path) / PAYLOAD_FILENAME, None)
+                        return value
+                    if kind == "error":
+                        raise RuntimeError(value)
+                    progress += 1
+                    if ctx is not None:
+                        await ctx.report_progress(progress=progress, total=6, message=value)
+                elif not process.is_alive():
+                    raise RuntimeError(f"Scan worker exited without a result (exit code {process.exitcode})")
+                else:
+                    await asyncio.sleep(0.05)
+    except TimeoutError as exc:
+        raise TimeoutError(f"Scan exceeded {SCAN_TIMEOUT_SECONDS} seconds; narrow the scan with .agents-config.json") from exc
+    finally:
+        if started:
+            await asyncio.to_thread(_stop_scan, process)
+        reader.close()
+        writer.close()
+        process.close()
+        _active_scans.discard(project_path)
+
+
+def _run_pipeline_sync(
+    project_path: Path,
+    force_full_scan: bool,
+    include_agents_md_context: bool = False,
+    progress=lambda message: None,
 ) -> dict:
     """Execute the full analysis pipeline. Returns a response dict."""
 
     # 1. Load config
     config = load_config(project_path)
+    progress("Detecting source changes")
     logger.info("Config loaded for %s (project_size=%s)", project_path, config.project_size)
 
     # 2. Load cache
@@ -240,7 +323,7 @@ async def _run_pipeline(
     # 3. Detect changes (raises NotAGitRepositoryError on non-git projects)
     changes = detect_changes(project_path, config, cache)
 
-    if not changes:
+    if not changes and not include_agents_md_context:
         return {
             "status": "no_changes",
             "message": (
@@ -256,11 +339,13 @@ async def _run_pipeline(
     logger.info("Detected %d changed files", len(changes))
 
     # 4. AST analysis
+    progress(f"Parsing {len(changes)} changed files")
     new_analyses = analyze_changes(project_path, changes, config, cache)
     logger.info("Analyzed %d files", len(new_analyses))
 
     # 4b. Env vars: scan only changed files; unchanged files contribute their
     #     cached env_vars. Cold starts cover everything because every file is a change.
+    progress("Collecting environment variables")
     env_map = detect_env_vars_for_changes(project_path, config, changes)
     env_union: set[str] = set().union(*env_map.values()) if env_map else set()
     changed_paths = {c.path for c in changes}
@@ -272,15 +357,25 @@ async def _run_pipeline(
     env_vars = sorted(env_union)
 
     # 5. Build payload
+    payload_analyses = new_analyses
+    payload_changes = changes
+    if include_agents_md_context:
+        payload_analyses = _merged_analyses(new_analyses, cache, changes)
+        payload_changes = [FileChange(path=path, status="new") for path in sorted(payload_analyses)]
+        payload_changes.extend(change for change in changes if change.status == "deleted")
+
+    progress("Building project context")
+    walked_files = _walk_files(project_path, config)
     payload = build_payload(
         project_path=project_path,
         config=config,
-        changes=changes,
-        new_analyses=new_analyses,
+        changes=payload_changes,
+        new_analyses=payload_analyses,
         cache=cache,
         scan_type=scan_type,
         include_agents_md_context=include_agents_md_context,
         env_vars=env_vars,
+        walked_files=walked_files,
     )
 
     # 6. Update and save cache
@@ -315,8 +410,6 @@ async def _run_pipeline(
                 symbols=symbols,
                 env_vars=env_map.get(change.path, []),
             )
-    save_cache(project_path, new_cache)
-    logger.info("Cache saved with %d entries", len(new_cache.files))
 
     # 7. Serialize within budget, then write to disk — never send it inline over
     #    MCP. Always compact, single-line JSON: the agent reassembles and parses
@@ -325,6 +418,7 @@ async def _run_pipeline(
     def _dump(p: dict) -> str:
         return json.dumps(p, default=str, separators=(",", ":"), ensure_ascii=False)
 
+    progress("Applying payload budget")
     payload_json = _dump(payload)
     if len(payload_json) > PAYLOAD_BUDGET_CHARS:
         payload, payload_json = _enforce_budget(
@@ -332,17 +426,22 @@ async def _run_pipeline(
             rebuild=lambda: build_payload(
                 project_path=project_path,
                 config=config,
-                changes=changes,
-                new_analyses=new_analyses,
+                changes=payload_changes,
+                new_analyses=payload_analyses,
                 cache=cache,
                 scan_type=scan_type,
                 include_agents_md_context=include_agents_md_context,
                 env_vars=env_vars,
+                walked_files=walked_files,
             ),
         )
 
+    progress("Saving analysis")
     payload_path = get_project_cache_dir(project_path) / PAYLOAD_FILENAME
-    payload_path.write_text(payload_json, encoding="utf-8")
+    temporary_path = payload_path.with_suffix(".tmp")
+    temporary_path.write_text(payload_json, encoding="utf-8")
+    temporary_path.replace(payload_path)
+    save_cache(project_path, new_cache)
     # Invalidate any cached text for this path — the identity key alone cannot
     # rule out a rewrite that lands on the same (mtime_ns, size).
     _payload_cache.pop(payload_path, None)
@@ -486,10 +585,8 @@ async def generate_agents_md(params: GenerateAgentsMdInput, ctx: Context) -> str
             project_path,
             force_full_scan=False,
             include_agents_md_context=True,
+            ctx=ctx,
         )
-
-        if result.get("status") == "no_changes":
-            return json.dumps(result, ensure_ascii=False)
 
         result["agents_md_path"] = str(agents_md_path)
         result["instructions"] = (

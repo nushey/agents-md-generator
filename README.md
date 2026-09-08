@@ -129,7 +129,7 @@ The client will call `generate_agents_md` automatically. To scan a different dir
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project_path` | string | `"."` | Path to the project root |
-| `force_full_scan` | boolean | `true` | Ignore cache and rescan everything. Defaults to `true` — direct calls always perform a full scan. |
+| `force_full_scan` | boolean | `false` | Ignore cache and rescan everything when explicitly set to `true`. |
 
 </details>
 
@@ -176,6 +176,12 @@ The generated `AGENTS.md` follows the [agents.md](https://agents.md/) open stand
 ### How Large Payloads Are Streamed
 
 For large codebases the analysis payload can be too big to return inline over the MCP wire. The server handles this transparently through `read_payload_chunk`.
+
+Scans run in a separate process with stage progress notifications and a five-minute timeout. Cancellation stops the scan worker. Only one scan per project can run at a time in a server instance; use `.agents-config.json` to narrow repositories that exceed the time limit.
+
+Generation always assembles a current snapshot, reusing cached symbols for unchanged source files. An interrupted generation can be retried even after its payload was consumed or another scan ran. The client remains responsible for writing `AGENTS.md`.
+
+Serialized payloads are capped at 300,000 characters. Dropped analysis sections are recorded in `metadata.degradations` and `metadata.truncated_sections`. Existing `AGENTS.md` content and writing instructions are preserved; if these alone exceed the budget, the tool returns an error instead of truncating the document.
 
 <details>
 <summary><b><code>generate_agents_md</code> flow</b></summary>

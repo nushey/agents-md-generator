@@ -6,8 +6,10 @@ def _build_instructions(has_existing: bool) -> str:
     action = "UPDATE the existing" if has_existing else "CREATE a new"
     update_note = (
         "\n\nUPDATE MODE: The current AGENTS.md is in 'existing_agents_md'. "
-        "Preserve sections unaffected by detected changes. "
-        "Rewrite only sections where the analysis shows something changed."
+        "Generation provides a current project snapshot, including cached unchanged sources. "
+        "Compare this snapshot with the document and preserve sections that remain accurate. "
+        "Entries marked new in a complete_snapshot are current files, not necessarily additions. "
+        "If metadata.degradations lists truncated sections, absence from those sections is not evidence of deletion."
         if has_existing
         else ""
     )

@@ -344,9 +344,9 @@ def test_slim_symbol_includes_decorators_when_present() -> None:
     assert result["decorators"] == ["HttpGet"]
 
 
-def test_slim_symbol_excludes_line_numbers_and_parent() -> None:
+def test_slim_symbol_preserves_parent_without_line_numbers() -> None:
     sym = _sym("myFunc", parent="MyClass")
     result = _slim_symbol(sym)
     assert "line_start" not in result
     assert "line_end" not in result
-    assert "parent" not in result
+    assert result["parent"] == "MyClass"
